@@ -38,8 +38,8 @@ class DrivingRiskModel(nn.Module):
     def forward(self, images, sensors, captions):
         """
         Args:
-            images:   [B, 16, 3, 224, 224]
-            sensors:  [B, 16, 3]
+            images:  
+            sensors:  
             captions: [B, MaxLen]
         Returns:
             vocab_outputs: [B, SeqLen, vocab_size]

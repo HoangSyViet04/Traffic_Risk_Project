@@ -83,6 +83,15 @@ def train():
     print("Dang khoi tao Model...")
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
     
+    # [QUAN TRỌNG] Nạp trọng số Pre-train cho nhánh CNN
+    pretrain_path = "cnn_pretrained.pth"
+    if os.path.exists(pretrain_path):
+        print(f"Phat hien file pretrained CNN: {pretrain_path}")
+        # Truy cập vào encoder bên trong DrivingRiskModel để gọi hàm load
+        model.encoder.load_pretrained_cnn(pretrain_path)
+    else:
+        print(f"CẢNH BÁO: Không tìm thấy {pretrain_path}! Mô hình sẽ train CNN từ đầu.")
+    
     # --- 4. CẤU HÌNH HUẤN LUYỆN ---
     criterion_caption = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
     criterion_motion = nn.MSELoss()

@@ -1,0 +1,23 @@
+Epoch [1/20] - Train MSE: 0.089177 | Val MSE: 0.073085
+Saved best pretrain model -> D:\Traffic_Risk_Project\saved_models\cnn_pretrained.pth (val=0.073085)
+Epoch [2/20] - Train MSE: 0.071280 | Val MSE: 0.073153
+Epoch [3/20] - Train MSE: 0.069746 | Val MSE: 0.069598
+Saved best pretrain model -> D:\Traffic_Risk_Project\saved_models\cnn_pretrained.pth (val=0.069598)
+Epoch [4/20] - Train MSE: 0.066094 | Val MSE: 0.072681
+Epoch [5/20] - Train MSE: 0.062365 | Val MSE: 0.066703
+Saved best pretrain model -> D:\Traffic_Risk_Project\saved_models\cnn_pretrained.pth (val=0.066703)
+Epoch [6/20] - Train MSE: 0.061166 | Val MSE: 0.076741
+Epoch [7/20] - Train MSE: 0.059839 | Val MSE: 0.069497
+Epoch [8/20] - Train MSE: 0.055788 | Val MSE: 0.066742
+Epoch [9/20] - Train MSE: 0.054480 | Val MSE: 0.070117
+Epoch [10/20] - Train MSE: 0.052225 | Val MSE: 0.067693
+Epoch [11/20] - Train MSE: 0.050652 | Val MSE: 0.076182
+Epoch [12/20] - Train MSE: 0.049758 | Val MSE: 0.073689
+Epoch [13/20] - Train MSE: 0.047797 | Val MSE: 0.069287
+Epoch [14/20] - Train MSE: 0.048550 | Val MSE: 0.069686
+Epoch [15/20] - Train MSE: 0.045646 | Val MSE: 0.071410
+Epoch [16/20] - Train MSE: 0.045149 | Val MSE: 0.070405
+Epoch [17/20] - Train MSE: 0.045028 | Val MSE: 0.069901
+Epoch [18/20] - Train MSE: 0.043334 | Val MSE: 0.069682
+Epoch [19/20] - Train MSE: 0.045273 | Val MSE: 0.071807
+Epoch [20/20] - Train MSE: 0.043299 | Val MSE: 0.069745

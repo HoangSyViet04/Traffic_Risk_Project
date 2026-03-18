@@ -7,5 +7,5 @@ static/
 test/
 docs/
 app.py
-
+draw_architecture_style.py
 best_model.pth
