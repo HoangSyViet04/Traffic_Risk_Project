@@ -9,7 +9,7 @@ class MultimodalEncoder(nn.Module):
     Multimodal Encoder theo hướng paper:
     - CNN 5 lớp (giống PretrainCNN) cho ảnh [B, 3, 90, 160]
     - Feature map [B, 64, 12, 20] -> flatten [B, 15360]
-    - Early Fusion với sensor (3-d): 15360 + 3 = 15363
+    - Early Fusion với sensor (3-d): 60@20x12 = 15360 + 3 = 15363
     - LSTM 2 tầng: input_size=15363, hidden_size=1024
     """
 

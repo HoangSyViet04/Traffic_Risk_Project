@@ -29,7 +29,7 @@ class Config:
     # --- HUẤN LUYỆN ---
     BATCH_SIZE = 50
     NUM_EPOCHS = 25
-    LEARNING_RATE = 1e-4
+    LEARNING_RATE = 1e-3
 
     # Thiết bị (tự động chọn GPU nếu có)
     DEVICE =  torch.device('cuda' if torch.cuda.is_available() else 'cpu')

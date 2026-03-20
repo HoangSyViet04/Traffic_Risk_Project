@@ -89,7 +89,7 @@ https://drive.google.com/file/d/1aICWnxlVep27B_9pudZoJbAUPKVVZmmN/view
 
 ### 1) Clone repository
 ```bash
-git clone https://github.com/HoangSyViet04/Near_Future_Traffic_Risk.git
+git clone https://github.com/HoangSyViet04/Traffic_Risk_Project.git
 ```
 
 ### 2) Tạo môi trường và cài dependencies
