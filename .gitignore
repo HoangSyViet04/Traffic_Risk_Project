@@ -8,5 +8,5 @@ test/
 docs/
 app.py
 draw_architecture_style.py
-best_model_e3.pth
-best_model_e5.pth
+saved_models/best_model_e3.pth
+saved_models/best_model_e5.pth

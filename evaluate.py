@@ -247,6 +247,6 @@ def evaluate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate DrivingRisk model on test_data.csv")
     parser.add_argument("--model-path", type=str, default=Config.MODEL_SAVE_PATH)
-    parser.add_argument("--test-csv", type=str, default=os.path.join(os.path.dirname(Config.TRAIN_CSV), "test_data.csv"))
+    parser.add_argument("--test-csv", type=str, default=Config.TEST_CSV)
     parser.add_argument("--max-samples", type=int, default=None, help="Optional quick evaluation limit")
     evaluate(parser.parse_args())

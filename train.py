@@ -75,8 +75,8 @@ def train():
     )
     val_dataset.data = val_df 
      
-    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=0) 
+    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=3,pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=3,pin_memory=True) 
     # --- 3. KHỞI TẠO MODEL ---
     print("Dang khoi tao Model...")
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)

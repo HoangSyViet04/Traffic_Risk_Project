@@ -5,9 +5,11 @@ basedir  = os.path.dirname(os.path.dirname(__file__))
 class Config:
     # Đường dẫn 
     TRAIN_CSV = os.path.join(basedir, 'data', 'processed_train.csv')
+    TEST_CSV = os.path.join(basedir, 'data', 'test_data.csv')
     IMAGES_ROOT = os.path.join(basedir, 'data', 'images')
     TELEMETRY_ROOT = os.path.join(basedir, 'data', 'telemetry')
     VOCAB_PATH = os.path.join(basedir, "saved_models", "custom_vocab.json")
+
     # cấu hình model
     # Kích thước ảnh đầu vào 
     IMAGE_SIZE = (90, 160)
