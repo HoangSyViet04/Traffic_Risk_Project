@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from transformers import AutoTokenizer
+from src.custom_tokenizer import CustomTokenizer
 from tqdm import tqdm
 import os
 import pandas as pd
@@ -29,7 +29,7 @@ def train():
     # --- 2. CHUẨN BỊ VÀ CHIA DỮ LIỆU (TRAIN/VAL/TEST) ---
     print("Dang tai va chia du lieu (Train 80% / Val 10% / Test 10%)...")
     
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    tokenizer = CustomTokenizer( vocab_path =Config.VOCAB_PATH, max_len=30)
     
     transform = transforms.Compose([
         transforms.Resize(Config.IMAGE_SIZE),

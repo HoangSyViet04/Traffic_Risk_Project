@@ -143,7 +143,7 @@ class DrivingRiskDataset(Dataset):
         tokens = self.tokenizer(
             caption, padding='max_length', truncation=True, max_length=30, return_tensors="pt"
         )
-        caption_ids = tokens.input_ids.squeeze(0)
+        caption_ids = tokens["input_ids"].squeeze(0)
 
         return {
             'video': video_input,           # [16, 3, 160, 90]

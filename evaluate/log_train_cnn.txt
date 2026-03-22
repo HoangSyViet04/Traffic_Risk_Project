@@ -22,8 +22,3 @@ Epoch [18/20] - Train MSE: 0.043334 | Val MSE: 0.069682
 Epoch [19/20] - Train MSE: 0.045273 | Val MSE: 0.071807
 Epoch [20/20] - Train MSE: 0.043299 | Val MSE: 0.069745
 
-
-MSE     : 0.035427
-BLEU-4  : 0.105123
-METEOR  : 0.422531
-CIDEr   : 0.451024

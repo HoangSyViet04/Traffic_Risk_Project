@@ -11,7 +11,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from src.custom_tokenizer import CustomTokenizer
 
 from src.config import Config
 from src.dataset import DrivingRiskDataset
@@ -146,35 +146,31 @@ def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_l
     model.eval()
 
     with torch.no_grad():
+        # 1. Trích xuất context chung (Image + Sensor)
         context = model.encoder(images, sensors)
+        
+        # 2. Dự đoán tương lai
         future_flat = model.action_head(context)
         future_pred = model.action_head.reshape_prediction(future_flat)
+        
+        # 3. Nối thành context vector 1034-d cho Decoder
         decoder_context = torch.cat((context, future_flat), dim=1)
 
-    start_token = tokenizer.cls_token_id
-    end_token = tokenizer.sep_token_id
-    generated_ids = [start_token]
+        # 4. GỌI HÀM BEAM SEARCH TỪ DECODER VỪA TẠO
+        start_token = tokenizer.cls_token_id
+        end_token = tokenizer.sep_token_id
+        
+        best_token_ids = model.decoder.generate_beam_search(
+            context=decoder_context,
+            start_token_id=start_token,
+            end_token_id=end_token,
+            max_len=max_len,
+            beam_size=5  # Bạn có thể tăng lên 5 để quét kỹ hơn nếu muốn
+        )
 
-    for _ in range(max_len - 1):
-        # Decoder nội bộ luôn gọi captions[:, :-1] nên cần thêm 1 dummy token
-        # ở cuối để offset đúng vị trí. Dummy PAD bị cắt bỏ trước khi vào LSTM
-        # nên không ảnh hưởng gì đến hidden state. output[-1] lúc đó đúng là
-        # vị trí dự đoán token tiếp theo dựa trên generated_ids[-1].
-        padded_input = torch.cat([
-            torch.tensor([generated_ids], dtype=torch.long, device=device),
-            torch.zeros(1, 1, dtype=torch.long, device=device),   # dummy PAD, bị slice trước khi vào LSTM
-        ], dim=1)
-
-        with torch.no_grad():
-            vocab_outputs = model.decoder(decoder_context, padded_input)
-            next_token_id = int(vocab_outputs[0, -1, :].argmax().item())
-
-        if next_token_id == end_token:
-            break
-
-        generated_ids.append(next_token_id)
-
-    pred_caption = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+    # 5. Dịch Token IDs thành văn bản, tự động bỏ qua các thẻ [CLS], [SEP], [PAD]
+    pred_caption = tokenizer.decode(best_token_ids, skip_special_tokens=True).strip()
+    
     return pred_caption, future_pred.squeeze(0)
 
 
@@ -187,7 +183,7 @@ def evaluate(args):
     if not os.path.exists(args.test_csv):
         raise FileNotFoundError(f"Test CSV not found: {args.test_csv}")
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    tokenizer = CustomTokenizer(vocab_path=Config.VOCAB_PATH, max_len=30)
     transform = transforms.Compose(
         [
             transforms.Resize(Config.IMAGE_SIZE),

@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 class CaptionDecoder(nn.Module):
     """
@@ -63,3 +63,71 @@ class CaptionDecoder(nn.Module):
         outputs = self.linear(hiddens)                           # shape: [B, SeqLen, vocab_size]
 
         return outputs
+    def generate_beam_search(self, context, start_token_id, end_token_id, max_len=30, beam_size=3):
+        """
+        Sinh caption bằng Beam Search cho 1 sample (Batch Size = 1).
+        Args:
+            context: [1, 1034] (Vector ngữ cảnh)
+            start_token_id: ID của token <BOS> (VD: tokenizer.cls_token_id)
+            end_token_id: ID của token <EOS> (VD: tokenizer.sep_token_id)
+            max_len: Độ dài tối đa của caption
+            beam_size: Số lượng nhánh (k) muốn theo dõi
+        """
+        device = context.device
+        
+        # 1. Khởi động LSTM bằng context vector (Giống hệt bước đầu trong hàm forward)
+        context_proj = self.context_projection(context)      # [1, 256]
+        context_proj = context_proj.unsqueeze(1)             # [1, 1, 256]
+        
+        # Đưa context qua LSTM để lấy hidden state ban đầu
+        _, (h, c) = self.lstm(context_proj)
+        
+        # 2. Khởi tạo Beam
+        # Cấu trúc 1 beam: (Điểm số log_prob, [Danh sách token], h, c)
+        beams = [(0.0, [start_token_id], h, c)]
+        
+        # 3. Vòng lặp sinh từ
+        for step in range(max_len):
+            new_beams = []
+            
+            for score, tokens, h_prev, c_prev in beams:
+                # Nếu beam này đã gặp thẻ <EOS>, giữ nguyên và đưa vào danh sách mới
+                if tokens[-1] == end_token_id:
+                    new_beams.append((score, tokens, h_prev, c_prev))
+                    continue
+                
+                # Lấy token cuối cùng ra để đoán token tiếp theo
+                last_token = torch.tensor([[tokens[-1]]], dtype=torch.long, device=device)
+                emb = self.embed(last_token)  # [1, 1, 256]
+                
+                # Cho qua LSTM
+                out, (h_next, c_next) = self.lstm(emb, (h_prev, c_prev))
+                
+                # Tính xác suất cho các từ tiếp theo
+                logits = self.linear(out.squeeze(1))          # [1, vocab_size]
+                log_probs = F.log_softmax(logits, dim=1)      # [1, vocab_size]
+                
+                # Lấy top k từ có xác suất cao nhất (k = beam_size)
+                topk_log_probs, topk_indices = torch.topk(log_probs, beam_size, dim=1)
+                
+                # Phân nhánh: Tạo beam mới cho mỗi từ trong top k
+                for i in range(beam_size):
+                    next_token = topk_indices[0, i].item()
+                    next_score = score + topk_log_probs[0, i].item()
+                    new_beams.append((next_score, tokens + [next_token], h_next, c_next))
+            
+            # Sắp xếp lại tất cả các nhánh theo điểm số (từ cao xuống thấp)
+            new_beams = sorted(new_beams, key=lambda x: x[0], reverse=True)
+            
+            # Cắt tỉa: Chỉ giữ lại top 'beam_size' nhánh tốt nhất
+            beams = new_beams[:beam_size]
+            
+            # Tối ưu: Nếu tất cả các beam tốt nhất đều đã chạm <EOS>, dừng sớm
+            if all(b[1][-1] == end_token_id for b in beams):
+                break
+                
+        # 4. Trả về chuỗi token của nhánh có điểm số cao nhất
+        best_beam = beams[0]
+        best_tokens = best_beam[1]
+        
+        return best_tokens
