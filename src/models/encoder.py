@@ -95,4 +95,4 @@ class MultimodalEncoder(nn.Module):
         # Lấy hidden state cuối cùng của TẦNG THỨ 2 (index -1)
         context_vector = h_n[-1]                                 # shape: [B, 1024]
 
-        return context_vector
+        return lstm_out, context_vector

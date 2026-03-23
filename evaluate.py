@@ -144,33 +144,28 @@ def official_cider_score_if_available(references: List[str], hypotheses: List[st
 
 def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_len=30):
     model.eval()
-
     with torch.no_grad():
-        # 1. Trích xuất context chung (Image + Sensor)
-        context = model.encoder(images, sensors)
+        # Lấy cả 2 output từ encoder
+        encoder_outputs, context = model.encoder(images, sensors)
         
-        # 2. Dự đoán tương lai
         future_flat = model.action_head(context)
         future_pred = model.action_head.reshape_prediction(future_flat)
         
-        # 3. Nối thành context vector 1034-d cho Decoder
-        decoder_context = torch.cat((context, future_flat), dim=1)
-
-        # 4. GỌI HÀM BEAM SEARCH TỪ DECODER VỪA TẠO
         start_token = tokenizer.cls_token_id
         end_token = tokenizer.sep_token_id
         
+        # Đút đủ tham số cho não bộ mới
         best_token_ids = model.decoder.generate_beam_search(
-            context=decoder_context,
+            encoder_outputs=encoder_outputs,
+            context=context,
+            future_flat=future_flat,
             start_token_id=start_token,
             end_token_id=end_token,
             max_len=max_len,
-            beam_size=5  # Bạn có thể tăng lên 5 để quét kỹ hơn nếu muốn
+            beam_size=5 
         )
 
-    # 5. Dịch Token IDs thành văn bản, tự động bỏ qua các thẻ [CLS], [SEP], [PAD]
     pred_caption = tokenizer.decode(best_token_ids, skip_special_tokens=True).strip()
-    
     return pred_caption, future_pred.squeeze(0)
 
 
@@ -205,7 +200,7 @@ def evaluate(args):
     if args.max_samples is not None:
         test_dataset.data = test_dataset.data.head(args.max_samples).copy()
 
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=0)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=3, pin_memory=True)
 
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
     model.load_state_dict(torch.load(args.model_path, map_location=device))

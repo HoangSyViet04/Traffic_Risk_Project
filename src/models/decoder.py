@@ -2,132 +2,118 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class TemporalAttention(nn.Module):
+    """Cơ chế Soft-Attention để quét qua các khung hình (frames)"""
+    def __init__(self, encoder_dim, decoder_dim, attention_dim):
+        super(TemporalAttention, self).__init__()
+        self.encoder_att = nn.Linear(encoder_dim, attention_dim)
+        self.decoder_att = nn.Linear(decoder_dim, attention_dim)
+        self.full_att = nn.Linear(attention_dim, 1)
+
+    def forward(self, encoder_outputs, decoder_hidden):
+        # encoder_outputs: [B, Frames, 1024]
+        # decoder_hidden:  [B, 1024]
+        dec_proj = self.decoder_att(decoder_hidden).unsqueeze(1)    # [B, 1, att_dim]
+        enc_proj = self.encoder_att(encoder_outputs)                # [B, Frames, att_dim]
+        
+        # Tính điểm số cho từng frame
+        att_energy = self.full_att(torch.tanh(enc_proj + dec_proj)) # [B, Frames, 1]
+        alpha = F.softmax(att_energy, dim=1)                        # [B, Frames, 1]
+        
+        # Nhặt đặc trưng tương ứng với trọng số Attention
+        attention_context = (encoder_outputs * alpha).sum(dim=1)    # [B, 1024]
+        return attention_context, alpha
+
 class CaptionDecoder(nn.Module):
-    """
-    Caption Decoder: Near-Future Aware.
-    Nhận context_vector (1024) + future_flat (10) = 1034-d làm input context.
-    Dùng LSTM 1 tầng (hidden=1024) với Teacher Forcing để sinh caption.
-    """
-
     def __init__(self, context_dim, hidden_size, vocab_size, embed_size=256):
-        """
-        Args:
-            context_dim: Kích thước vector ngữ cảnh đầu vào (1034 = 1024 + 10)
-            hidden_size: Kích thước hidden state LSTM (1024)
-            vocab_size:  Kích thước bộ từ điển (BERT ≈ 30522)
-            embed_size:  Kích thước word embedding (256)
-        """
         super(CaptionDecoder, self).__init__()
+        self.vocab_size = vocab_size
 
-        # 1. Word Embedding: token ID -> vector
+        # 1. Attention Module
+        self.attention = TemporalAttention(hidden_size, hidden_size, 512)
+
+        # 2. Lớp khởi tạo bộ nhớ ban đầu cho LSTM từ context vector 1034-d
+        self.init_h = nn.Linear(context_dim, hidden_size)
+        self.init_c = nn.Linear(context_dim, hidden_size)
+
         self.embed = nn.Embedding(vocab_size, embed_size)
 
-        # 2. Chiếu context (1034-d) về embed_size (256-d) để concat với word embeddings
-        self.context_projection = nn.Linear(context_dim, embed_size)
-
-        # 3. LSTM sinh từ (1 tầng, hidden=1024)
-        self.lstm = nn.LSTM(
-            input_size=embed_size,   # 256
-            hidden_size=hidden_size, # 1024
-            num_layers=1,
-            batch_first=True
+        # 3. Đổi LSTM thành LSTMCell để chạy từng bước. 
+        # Input = Word Embedding (256) + Attention Context (1024)
+        self.lstm_cell = nn.LSTMCell(
+            input_size=embed_size + hidden_size, 
+            hidden_size=hidden_size
         )
 
-        # 4. Output: hidden state -> xác suất từng từ trong vocab
         self.linear = nn.Linear(hidden_size, vocab_size)
 
-    def forward(self, context, captions):
-        """
-        Args:
-            context:  [Batch, 1034]  (context_vector + future_flat đã nối)
-            captions: [Batch, MaxLen]  (Token IDs của caption target)
-        Returns:
-            outputs: [Batch, SeqLen, vocab_size]
-        """
-        # Teacher Forcing: bỏ từ CUỐI, dự đoán từ TIẾP THEO
-        # Input:  [CLS] The car is ...
-        # Target: The car is ... [SEP]
-        embeddings = self.embed(captions[:, :-1])                # shape: [B, SeqLen-1, 256]
+    def forward(self, encoder_outputs, context, future_flat, captions):
+        B = encoder_outputs.size(0)
+        seq_len = captions.size(1)
 
-        # Chiếu context về embed_size
-        context_proj = self.context_projection(context)          # shape: [B, 256]
-        context_proj = context_proj.unsqueeze(1)                 # shape: [B, 1, 256]
+        # Trộn ngữ cảnh và tương lai để làm bệ phóng ban đầu
+        decoder_context = torch.cat((context, future_flat), dim=1) # [B, 1034]
+        h = self.init_h(decoder_context) # [B, 1024]
+        c = self.init_c(decoder_context) # [B, 1024]
 
-        # Nối context vào ĐẦU chuỗi: [Context, Word1, Word2, ...]
-        inputs = torch.cat((context_proj, embeddings), dim=1)    # shape: [B, SeqLen, 256]
+        embeddings = self.embed(captions) # [B, SeqLen, 256]
+        outputs = torch.zeros(B, seq_len, self.vocab_size).to(context.device)
 
-        # Chạy qua LSTM
-        hiddens, _ = self.lstm(inputs)                           # shape: [B, SeqLen, 1024]
-
-        # Tính xác suất từ
-        outputs = self.linear(hiddens)                           # shape: [B, SeqLen, vocab_size]
+        # Vòng lặp xé lẻ từng từ để dịch
+        for t in range(seq_len):
+            word_embed = embeddings[:, t, :] # [B, 256]
+            
+            # CẤY MẮT ATTENTION: "Nhìn" xem frame nào quan trọng
+            att_context, _ = self.attention(encoder_outputs, h) # [B, 1024]
+            
+            # Gộp Từ Vựng + Hình ảnh lại đưa vào não (LSTM)
+            lstm_input = torch.cat([word_embed, att_context], dim=1) # [B, 1280]
+            
+            h, c = self.lstm_cell(lstm_input, (h, c))
+            outputs[:, t, :] = self.linear(h)
 
         return outputs
-    def generate_beam_search(self, context, start_token_id, end_token_id, max_len=30, beam_size=3):
-        """
-        Sinh caption bằng Beam Search cho 1 sample (Batch Size = 1).
-        Args:
-            context: [1, 1034] (Vector ngữ cảnh)
-            start_token_id: ID của token <BOS> (VD: tokenizer.cls_token_id)
-            end_token_id: ID của token <EOS> (VD: tokenizer.sep_token_id)
-            max_len: Độ dài tối đa của caption
-            beam_size: Số lượng nhánh (k) muốn theo dõi
-        """
+
+    def generate_beam_search(self, encoder_outputs, context, future_flat, start_token_id, end_token_id, max_len=30, beam_size=3):
         device = context.device
         
-        # 1. Khởi động LSTM bằng context vector (Giống hệt bước đầu trong hàm forward)
-        context_proj = self.context_projection(context)      # [1, 256]
-        context_proj = context_proj.unsqueeze(1)             # [1, 1, 256]
+        # Khởi động não bộ
+        decoder_context = torch.cat((context, future_flat), dim=1)
+        h = self.init_h(decoder_context)
+        c = self.init_c(decoder_context)
         
-        # Đưa context qua LSTM để lấy hidden state ban đầu
-        _, (h, c) = self.lstm(context_proj)
-        
-        # 2. Khởi tạo Beam
-        # Cấu trúc 1 beam: (Điểm số log_prob, [Danh sách token], h, c)
         beams = [(0.0, [start_token_id], h, c)]
         
-        # 3. Vòng lặp sinh từ
         for step in range(max_len):
             new_beams = []
             
             for score, tokens, h_prev, c_prev in beams:
-                # Nếu beam này đã gặp thẻ <EOS>, giữ nguyên và đưa vào danh sách mới
                 if tokens[-1] == end_token_id:
                     new_beams.append((score, tokens, h_prev, c_prev))
                     continue
                 
-                # Lấy token cuối cùng ra để đoán token tiếp theo
-                last_token = torch.tensor([[tokens[-1]]], dtype=torch.long, device=device)
-                emb = self.embed(last_token)  # [1, 1, 256]
+                last_token = torch.tensor([tokens[-1]], dtype=torch.long, device=device)
+                emb = self.embed(last_token) # [1, 256]
                 
-                # Cho qua LSTM
-                out, (h_next, c_next) = self.lstm(emb, (h_prev, c_prev))
+                # Gọi Attention
+                att_context, _ = self.attention(encoder_outputs, h_prev)
+                lstm_input = torch.cat([emb, att_context], dim=1)
                 
-                # Tính xác suất cho các từ tiếp theo
-                logits = self.linear(out.squeeze(1))          # [1, vocab_size]
-                log_probs = F.log_softmax(logits, dim=1)      # [1, vocab_size]
+                h_next, c_next = self.lstm_cell(lstm_input, (h_prev, c_prev))
                 
-                # Lấy top k từ có xác suất cao nhất (k = beam_size)
+                logits = self.linear(h_next)
+                log_probs = F.log_softmax(logits, dim=1)
+                
                 topk_log_probs, topk_indices = torch.topk(log_probs, beam_size, dim=1)
                 
-                # Phân nhánh: Tạo beam mới cho mỗi từ trong top k
                 for i in range(beam_size):
                     next_token = topk_indices[0, i].item()
                     next_score = score + topk_log_probs[0, i].item()
                     new_beams.append((next_score, tokens + [next_token], h_next, c_next))
             
-            # Sắp xếp lại tất cả các nhánh theo điểm số (từ cao xuống thấp)
             new_beams = sorted(new_beams, key=lambda x: x[0], reverse=True)
-            
-            # Cắt tỉa: Chỉ giữ lại top 'beam_size' nhánh tốt nhất
             beams = new_beams[:beam_size]
-            
-            # Tối ưu: Nếu tất cả các beam tốt nhất đều đã chạm <EOS>, dừng sớm
             if all(b[1][-1] == end_token_id for b in beams):
                 break
                 
-        # 4. Trả về chuỗi token của nhánh có điểm số cao nhất
-        best_beam = beams[0]
-        best_tokens = best_beam[1]
-        
-        return best_tokens
+        return beams[0][1]
