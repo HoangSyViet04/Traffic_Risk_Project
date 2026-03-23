@@ -29,6 +29,7 @@ class CaptionDecoder(nn.Module):
         super(CaptionDecoder, self).__init__()
         self.vocab_size = vocab_size
 
+        self.context_projection = nn.Linear(context_dim, embed_size)
         # 1. Attention Module
         self.attention = TemporalAttention(hidden_size, hidden_size, 512)
 
@@ -55,13 +56,21 @@ class CaptionDecoder(nn.Module):
         decoder_context = torch.cat((context, future_flat), dim=1) # [B, 1034]
         h = self.init_h(decoder_context) # [B, 1024]
         c = self.init_c(decoder_context) # [B, 1024]
-
+        # Chuẩn bị trước các từ nhúng
         embeddings = self.embed(captions) # [B, SeqLen, 256]
+        # Tạo vector hình ảnh để mồi cho nhịp t=0
+        context_proj = self.context_projection(decoder_context) # [B, 256]
+
         outputs = torch.zeros(B, seq_len, self.vocab_size).to(context.device)
 
         # Vòng lặp xé lẻ từng từ để dịch
         for t in range(seq_len):
-            word_embed = embeddings[:, t, :] # [B, 256]
+            if t == 0:
+                # Ở nhịp đầu tiên, ép nó lấy Hình Ảnh làm đầu vào, không cho chép chữ
+                word_embed = context_proj
+            else:
+                # Ở các nhịp sau, đưa chữ của nhịp TRƯỚC (t-1) để dự đoán chữ HIỆN TẠI (t)
+                word_embed = embeddings[:, t-1, :]
             
             # CẤY MẮT ATTENTION: "Nhìn" xem frame nào quan trọng
             att_context, _ = self.attention(encoder_outputs, h) # [B, 1024]
@@ -81,6 +90,11 @@ class CaptionDecoder(nn.Module):
         decoder_context = torch.cat((context, future_flat), dim=1)
         h = self.init_h(decoder_context)
         c = self.init_c(decoder_context)
+
+        context_proj = self.context_projection(decoder_context) 
+        att_context, _ = self.attention(encoder_outputs, h)
+        lstm_input = torch.cat([context_proj, att_context], dim=1)
+        h, c = self.lstm_cell(lstm_input, (h, c))
         
         beams = [(0.0, [start_token_id], h, c)]
         
@@ -93,9 +107,8 @@ class CaptionDecoder(nn.Module):
                     continue
                 
                 last_token = torch.tensor([tokens[-1]], dtype=torch.long, device=device)
-                emb = self.embed(last_token) # [1, 256]
+                emb = self.embed(last_token) 
                 
-                # Gọi Attention
                 att_context, _ = self.attention(encoder_outputs, h_prev)
                 lstm_input = torch.cat([emb, att_context], dim=1)
                 

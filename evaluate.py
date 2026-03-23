@@ -2,6 +2,7 @@ import argparse
 import collections
 import math
 import os
+import random
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
@@ -21,30 +22,11 @@ from src.models.full_model import DrivingRiskModel
 def _safe_word_tokenize(text: str) -> List[str]:
     return text.lower().strip().split()
 
-
-def _sentence_bleu4(reference: str, hypothesis: str) -> float:
-    from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
-
-    ref_tokens = _safe_word_tokenize(reference)
-    hyp_tokens = _safe_word_tokenize(hypothesis)
-    if not hyp_tokens:
-        return 0.0
-
-    return sentence_bleu(
-        [ref_tokens],
-        hyp_tokens,
-        weights=(0.25, 0.25, 0.25, 0.25),
-        smoothing_function=SmoothingFunction().method1,
-    )
-
-
 def _meteor_score(reference: str, hypothesis: str) -> float:
     try:
         from nltk.translate.meteor_score import meteor_score
-
         return meteor_score([_safe_word_tokenize(reference)], _safe_word_tokenize(hypothesis))
     except Exception:
-        # Fallback when NLTK resources are unavailable: unigram F1
         ref = collections.Counter(_safe_word_tokenize(reference))
         hyp = collections.Counter(_safe_word_tokenize(hypothesis))
         if not ref or not hyp:
@@ -116,7 +98,6 @@ def cider_score(references: List[str], hypotheses: List[str], sigma: float = 6.0
             hyp_vec = _tfidf_vector(hyp_tokens, n, df[n], n_docs)
             cos = _cosine_similarity(ref_vec, hyp_vec)
 
-            # Gaussian penalty for length mismatch, similar to CIDEr design.
             len_penalty = math.exp(-((len(hyp_tokens) - len(ref_tokens)) ** 2) / (2 * sigma * sigma))
             per_n_scores.append(cos * len_penalty)
 
@@ -126,13 +107,8 @@ def cider_score(references: List[str], hypotheses: List[str], sigma: float = 6.0
 
 
 def official_cider_score_if_available(references: List[str], hypotheses: List[str]) -> Tuple[float, str]:
-    """
-    Returns (score, mode).
-    mode = "official" when pycocoevalcap is available, otherwise "approx".
-    """
     try:
         from pycocoevalcap.cider.cider import Cider
-
         gts = {i: [references[i]] for i in range(len(references))}
         res = {i: [hypotheses[i]] for i in range(len(hypotheses))}
         scorer = Cider()
@@ -200,7 +176,7 @@ def evaluate(args):
     if args.max_samples is not None:
         test_dataset.data = test_dataset.data.head(args.max_samples).copy()
 
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=3, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=0)
 
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
@@ -226,18 +202,40 @@ def evaluate(args):
         references.append(tokenizer.decode(batch["caption"][0], skip_special_tokens=True).strip())
         hypotheses.append(pred_caption)
 
-    bleu4_scores = [_sentence_bleu4(ref, hyp) for ref, hyp in zip(references, hypotheses)]
+    # --- IN RA 5 MẪU DỰ ĐOÁN NGẪU NHIÊN ---
+    print("\n" + "="*50)
+    print("👀 SOI TẬN MẮT 5 MẪU DỰ ĐOÁN CỦA AI 👀")
+    print("="*50)
+    sample_indices = random.sample(range(len(references)), min(5, len(references)))
+    for i, idx in enumerate(sample_indices):
+        print(f"Mẫu {i+1} (Index: {idx}):")
+        print(f" 🎯 Thực tế : {references[idx]}")
+        print(f" 🤖 AI đoán : {hypotheses[idx]}")
+        print("-" * 50)
+
+    # --- TÍNH ĐIỂM BẰNG CORPUS-BLEU VÀ CÁC METRIC KHÁC ---
+    from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
+    
+    list_of_refs = [[_safe_word_tokenize(ref)] for ref in references]
+    list_of_hyps = [_safe_word_tokenize(hyp) for hyp in hypotheses]
+    
+    corpus_bleu4 = corpus_bleu(
+        list_of_refs, 
+        list_of_hyps, 
+        weights=(0.25, 0.25, 0.25, 0.25),
+        smoothing_function=SmoothingFunction().method1
+    )
+
     meteor_scores = [_meteor_score(ref, hyp) for ref, hyp in zip(references, hypotheses)]
     cider, cider_mode = official_cider_score_if_available(references, hypotheses)
 
     print("\n===== Evaluation Results =====")
-    print(f"MSE     : {float(np.mean(mse_scores)):.6f}")
-    print(f"BLEU-4  : {float(np.mean(bleu4_scores)):.6f}")
-    print(f"METEOR  : {float(np.mean(meteor_scores)):.6f}")
-    print(f"CIDEr   : {cider:.6f}")
+    print(f"MSE             : {float(np.mean(mse_scores)):.6f}")
+    print(f"BLEU-4 (Corpus) : {corpus_bleu4:.6f}")
+    print(f"METEOR          : {float(np.mean(meteor_scores)):.6f}")
+    print(f"CIDEr           : {cider:.6f}")
     if cider_mode == "approx":
-        print("Note    : pycocoevalcap not found, CIDEr is approximate.")
-
+        print("Note            : pycocoevalcap not found, CIDEr is approximate.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate DrivingRisk model on test_data.csv")
