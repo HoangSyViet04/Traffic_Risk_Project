@@ -92,9 +92,9 @@ def train():
         print(f"CẢNH BÁO: Không tìm thấy {pretrain_path}! Mô hình sẽ train CNN từ đầu.")
     
     # --- 4. CẤU HÌNH HUẤN LUYỆN ---
-    criterion_caption = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    criterion_caption = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
     criterion_motion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
+    optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE, weight_decay= 1e-5)
 
     best_val_loss = float('inf')
 
