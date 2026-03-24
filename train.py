@@ -19,22 +19,19 @@ class FocalLoss(nn.Module):
     Focal Loss: Trị tận gốc bệnh học vẹt (Class Imbalance).
     Bóp nghẹt loss của những từ dễ (văn mẫu), phóng to loss của những từ hiếm (biển báo, xe đỗ).
     """
-    def __init__(self, gamma=2.0, ignore_index=-100):
+    def __init__(self, gamma=2.0, ignore_index=-100, label_smoothing=0.1):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
-        # Dùng reduction='none' để lấy loss của từng từ riêng lẻ
-        self.ce = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none')
+        self.ce = nn.CrossEntropyLoss(
+            ignore_index=ignore_index, 
+            reduction='none', 
+            label_smoothing=label_smoothing
+        )
 
     def forward(self, inputs, targets):
-        # Tính Cross Entropy cơ bản
         ce_loss = self.ce(inputs, targets)
-        
-        # Lấy xác suất dự đoán (pt)
         pt = torch.exp(-ce_loss)
-        
-        # Ép trọng số Focal: Từ nào đoán càng đúng (pt cao) -> (1-pt) càng nhỏ -> Loss bị triệt tiêu
         focal_loss = ((1 - pt) ** self.gamma) * ce_loss
-        
         return focal_loss.mean()
     
 def train():
