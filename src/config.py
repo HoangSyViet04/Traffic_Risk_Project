@@ -3,6 +3,11 @@ import os
 
 basedir  = os.path.dirname(os.path.dirname(__file__))
 class Config:
+    # Presets:
+    # - "paper": replicate Mori et al. (Near-Future captioning) baseline settings as closely as possible.
+    # - "improved": current enhanced training setup.
+    PRESET = "paper"
+
     # Đường dẫn 
     TRAIN_CSV = os.path.join(basedir, 'data', 'processed_train.csv')
     IMAGES_ROOT = os.path.join(basedir, 'data', 'images')
@@ -32,6 +37,11 @@ class Config:
     # - "lstm": decoder cũ
     # - "transformer": transformer decoder mới (khuyến nghị)
     DECODER_TYPE = "transformer"
+
+    # Dropout (paper dùng cấu hình đơn giản; set về 0 trong preset paper)
+    ENCODER_LSTM_DROPOUT = 0.3
+    DECODER_DROPOUT = 0.3
+    ACTION_DROPOUT = 0.3
 
     # Transformer decoder hyperparams
     TRANSFORMER_D_MODEL = 512
@@ -92,8 +102,56 @@ class Config:
     SIMPLE_VOCAB_SIZE = 4000
     VOCAB_SAVE_PATH = os.path.join("saved_models", "simple_vocab.json")
 
+    # Init mode
+    # - None: keep PyTorch defaults
+    # - "xavier_paper": Xavier/orthogonal init similar to paper setting
+    INIT_MODE = None
+
     # Thiết bị (tự động chọn GPU nếu có)
     DEVICE =  torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # SAVE 
     MODEL_SAVE_PATH = 'saved_models/best_model.pth'
+
+
+# ---- Apply preset overrides (class-level) ----
+def _apply_preset():
+    preset = str(getattr(Config, "PRESET", "improved")).lower().strip()
+    if preset != "paper":
+        return
+
+    # Paper: n=5 frames, 30 epochs, batch=50
+    Config.MAX_FRAMES = 5
+    Config.NUM_EPOCHS = 30
+
+    # Paper: LSTM decoder
+    Config.DECODER_TYPE = "lstm"
+
+    # Paper dictionary size: 1290 (we add 4 special tokens)
+    Config.TOKENIZER_TYPE = "simple"
+    Config.SIMPLE_VOCAB_SIZE = 1290 + 4
+
+    # Paper training: Adam, no weight decay, no label smoothing, no scheduler tricks
+    Config.OPTIMIZER = "adam"
+    Config.WEIGHT_DECAY = 0.0
+    Config.LABEL_SMOOTHING = 0.0
+    Config.USE_LR_SCHEDULER = False
+    Config.USE_EARLY_STOPPING = False
+
+    # Keep CNN frozen (use pretrained feature extractor)
+    Config.UNFREEZE_CNN_EPOCH = None
+
+    # Disable imbalance reweighting for paper comparability
+    Config.USE_TOKEN_WEIGHTED_LOSS = False
+    Config.USE_WEIGHTED_SAMPLER = False
+
+    # Dropout not described in paper experiments: set to 0
+    Config.ENCODER_LSTM_DROPOUT = 0.0
+    Config.DECODER_DROPOUT = 0.0
+    Config.ACTION_DROPOUT = 0.0
+
+    # Xavier init (paper mentions Xavier)
+    Config.INIT_MODE = "xavier_paper"
+
+
+_apply_preset()

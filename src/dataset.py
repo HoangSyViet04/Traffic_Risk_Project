@@ -190,7 +190,8 @@ class DrivingRiskDataset(Dataset):
             'video': video_input,           # [16, 3, 160, 90]
             'sensor': sensor_input,         # [16, 3] (Speed, Accel, Course)
             'future_motion': future_motion, # [5, 2]  (Speed, Course) -> ĐÚNG CHUẨN
-            'caption': caption_ids          # [30]
+            'caption': caption_ids,         # [30]
+            'caption_text': caption,        # raw string for evaluation/debug
         }
 
 

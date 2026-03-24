@@ -2,6 +2,7 @@ import argparse
 import collections
 import math
 import os
+import re
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
@@ -19,6 +20,36 @@ from src.models.full_model import DrivingRiskModel
 from src.simple_tokenizer import SimpleVocabTokenizer
 
 
+def _load_checkpoint(path: str, device) -> tuple[dict, dict]:
+    obj = torch.load(path, map_location=device)
+    if isinstance(obj, dict) and "model_state_dict" in obj:
+        return obj["model_state_dict"], (obj.get("meta") or {})
+    # Backward-compat: old checkpoints were raw state_dict
+    return obj, {}
+
+
+def _apply_meta_overrides(meta: dict) -> None:
+    # Override Config for this process only so model/tokenizer match the checkpoint.
+    if not meta:
+        return
+    if "decoder_type" in meta and meta["decoder_type"]:
+        try:
+            Config.DECODER_TYPE = str(meta["decoder_type"])
+        except Exception:
+            pass
+    if "tokenizer_type" in meta and meta["tokenizer_type"]:
+        try:
+            Config.TOKENIZER_TYPE = str(meta["tokenizer_type"])
+        except Exception:
+            pass
+    if "vocab_path" in meta and meta["vocab_path"]:
+        # used by _load_tokenizer_for_inference
+        try:
+            Config.VOCAB_PATH = str(meta["vocab_path"])
+        except Exception:
+            pass
+
+
 def _load_tokenizer_for_inference():
     tok_type = str(getattr(Config, "TOKENIZER_TYPE", "bert")).lower().strip()
     if tok_type == "simple":
@@ -34,7 +65,23 @@ def _load_tokenizer_for_inference():
 
 
 def _safe_word_tokenize(text: str) -> List[str]:
-    return text.lower().strip().split()
+    text = (text or "").strip().lower()
+    # Match the repo's simple tokenizer behavior (space punctuation)
+    text = re.sub(r"([.,!?;:()\[\]\"'])", r" \1 ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.split() if text else []
+
+
+def _split_references(text: str) -> List[str]:
+    """Allow multiple references per sample if the dataset encodes them.
+
+    If a caption string contains '||', treat it as multiple reference captions.
+    """
+    s = (text or "").strip()
+    if "||" in s:
+        parts = [p.strip() for p in s.split("||")]
+        return [p for p in parts if p]
+    return [s]
 
 
 def _sentence_bleu4(reference: str, hypothesis: str) -> float:
@@ -53,23 +100,57 @@ def _sentence_bleu4(reference: str, hypothesis: str) -> float:
     )
 
 
-def _meteor_score(reference: str, hypothesis: str) -> float:
+def _corpus_bleu4(references_list: List[List[str]], hypotheses: List[str]) -> float:
+    """Compute corpus BLEU-4, closer to paper-style reporting."""
+    from nltk.translate.bleu_score import SmoothingFunction, corpus_bleu
+
+    list_of_references = []
+    for refs in references_list:
+        list_of_references.append([_safe_word_tokenize(r) for r in refs if r is not None])
+
+    hyps_tok = [_safe_word_tokenize(h) for h in hypotheses]
+    if not hyps_tok:
+        return 0.0
+
+    return float(
+        corpus_bleu(
+            list_of_references,
+            hyps_tok,
+            weights=(0.25, 0.25, 0.25, 0.25),
+            smoothing_function=SmoothingFunction().method1,
+        )
+    )
+
+
+def _meteor_scores(references: List[str], hypotheses: List[str]) -> Tuple[List[float], str]:
+    """Return per-sample METEOR scores and the implementation mode."""
     try:
         from nltk.translate.meteor_score import meteor_score
 
-        return meteor_score([_safe_word_tokenize(reference)], _safe_word_tokenize(hypothesis))
+        # Smoke call to ensure resources are present
+        _ = meteor_score(["a".split()], "a".split())
+
+        scores = []
+        for ref, hyp in zip(references, hypotheses):
+            scores.append(float(meteor_score([_safe_word_tokenize(ref)], _safe_word_tokenize(hyp))))
+        return scores, "nltk"
     except Exception:
         # Fallback when NLTK resources are unavailable: unigram F1
-        ref = collections.Counter(_safe_word_tokenize(reference))
-        hyp = collections.Counter(_safe_word_tokenize(hypothesis))
-        if not ref or not hyp:
-            return 0.0
-        overlap = sum((ref & hyp).values())
-        precision = overlap / max(sum(hyp.values()), 1)
-        recall = overlap / max(sum(ref.values()), 1)
-        if precision + recall == 0:
-            return 0.0
-        return (2 * precision * recall) / (precision + recall)
+        scores = []
+        for reference, hypothesis in zip(references, hypotheses):
+            ref = collections.Counter(_safe_word_tokenize(reference))
+            hyp = collections.Counter(_safe_word_tokenize(hypothesis))
+            if not ref or not hyp:
+                scores.append(0.0)
+                continue
+            overlap = sum((ref & hyp).values())
+            precision = overlap / max(sum(hyp.values()), 1)
+            recall = overlap / max(sum(ref.values()), 1)
+            if precision + recall == 0:
+                scores.append(0.0)
+            else:
+                scores.append((2 * precision * recall) / (precision + recall))
+        return scores, "fallback_f1"
 
 
 def _ngrams(tokens: List[str], n: int) -> List[Tuple[str, ...]]:
@@ -155,6 +236,25 @@ def official_cider_score_if_available(references: List[str], hypotheses: List[st
         return float(score), "official"
     except Exception:
         return cider_score(references, hypotheses), "approx"
+
+
+def official_cider_score_multi_ref_if_available(
+    references_list: List[List[str]],
+    hypotheses: List[str],
+) -> Tuple[float, str]:
+    """CIDEr with multiple references per sample when available."""
+    try:
+        from pycocoevalcap.cider.cider import Cider
+
+        gts = {i: references_list[i] for i in range(len(references_list))}
+        res = {i: [hypotheses[i]] for i in range(len(hypotheses))}
+        scorer = Cider()
+        score, _ = scorer.compute_score(gts, res)
+        return float(score), "official"
+    except Exception:
+        # fall back to single-ref approximation
+        flat_refs = [refs[0] if refs else "" for refs in references_list]
+        return cider_score(flat_refs, hypotheses), "approx"
 
 
 def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_len=30):
@@ -287,6 +387,16 @@ def evaluate(args):
     if not os.path.exists(args.test_csv):
         raise FileNotFoundError(f"Test CSV not found: {args.test_csv}")
 
+    state_dict, meta = _load_checkpoint(args.model_path, device)
+    if meta:
+        print(
+            "Loaded checkpoint meta: "
+            f"tokenizer_type={meta.get('tokenizer_type')} "
+            f"decoder_type={meta.get('decoder_type')} "
+            f"vocab_path={meta.get('vocab_path')}"
+        )
+    _apply_meta_overrides(meta)
+
     tokenizer = _load_tokenizer_for_inference()
     transform = transforms.Compose(
         [
@@ -314,7 +424,7 @@ def evaluate(args):
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=0)
 
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
-    model.load_state_dict(torch.load(args.model_path, map_location=device))
+    model.load_state_dict(state_dict)
     model.eval()
 
     if hasattr(model.decoder, "pad_token_id"):
@@ -325,7 +435,7 @@ def evaluate(args):
 
     mse_criterion = nn.MSELoss(reduction="mean")
     mse_scores = []
-    references = []
+    references_list: List[List[str]] = []
     hypotheses = []
 
     print(f"Evaluating {len(test_dataset)} samples...")
@@ -349,18 +459,33 @@ def evaluate(args):
         mse_value = mse_criterion(pred_motion.unsqueeze(0), future_targets).item()
         mse_scores.append(mse_value)
 
-        references.append(tokenizer.decode(batch["caption"][0], skip_special_tokens=True).strip())
+        # Prefer raw caption text to avoid tokenizer decode artifacts
+        if "caption_text" in batch:
+            ref_text = batch["caption_text"][0]
+        else:
+            ref_text = tokenizer.decode(batch["caption"][0], skip_special_tokens=True).strip()
+        references_list.append(_split_references(str(ref_text)))
         hypotheses.append(pred_caption)
 
-    bleu4_scores = [_sentence_bleu4(ref, hyp) for ref, hyp in zip(references, hypotheses)]
-    meteor_scores = [_meteor_score(ref, hyp) for ref, hyp in zip(references, hypotheses)]
-    cider, cider_mode = official_cider_score_if_available(references, hypotheses)
+    # BLEU: report both corpus-level (paper-closer) and sentence-average (debug)
+    try:
+        bleu4_corpus = _corpus_bleu4(references_list, hypotheses)
+    except Exception:
+        bleu4_corpus = 0.0
+    flat_refs = [refs[0] if refs else "" for refs in references_list]
+    bleu4_sentence_avg = float(np.mean([_sentence_bleu4(r, h) for r, h in zip(flat_refs, hypotheses)])) if hypotheses else 0.0
+
+    meteor_scores, meteor_mode = _meteor_scores(flat_refs, hypotheses)
+    cider, cider_mode = official_cider_score_multi_ref_if_available(references_list, hypotheses)
 
     print("\n===== Evaluation Results =====")
     print(f"MSE     : {float(np.mean(mse_scores)):.6f}")
-    print(f"BLEU-4  : {float(np.mean(bleu4_scores)):.6f}")
-    print(f"METEOR  : {float(np.mean(meteor_scores)):.6f}")
-    print(f"CIDEr   : {cider:.6f}")
+    # Paper tables report *100 scaling for BLEU/METEOR/CIDEr
+    print(f"BLEU@4 (corpus) : {bleu4_corpus*100.0:.2f}  (raw={bleu4_corpus:.6f})")
+    print(f"BLEU@4 (sent-avg): {bleu4_sentence_avg*100.0:.2f}  (raw={bleu4_sentence_avg:.6f})")
+    print(f"METEOR          : {float(np.mean(meteor_scores))*100.0:.2f}  (raw={float(np.mean(meteor_scores)):.6f})")
+    print(f"CIDEr           : {cider*100.0:.2f}  (raw={cider:.6f})")
+    print(f"METEOR impl: {meteor_mode}")
     if cider_mode == "approx":
         print("Note    : pycocoevalcap not found, CIDEr is approximate.")
 

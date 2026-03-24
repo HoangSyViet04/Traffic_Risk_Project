@@ -11,6 +11,33 @@ from src.models.full_model import DrivingRiskModel
 from src.simple_tokenizer import SimpleVocabTokenizer
 
 
+def _load_checkpoint(path: str, device):
+    obj = torch.load(path, map_location=device)
+    if isinstance(obj, dict) and "model_state_dict" in obj:
+        return obj["model_state_dict"], (obj.get("meta") or {})
+    return obj, {}
+
+
+def _apply_meta_overrides(meta: dict) -> None:
+    if not meta:
+        return
+    if "decoder_type" in meta and meta["decoder_type"]:
+        try:
+            Config.DECODER_TYPE = str(meta["decoder_type"])
+        except Exception:
+            pass
+    if "tokenizer_type" in meta and meta["tokenizer_type"]:
+        try:
+            Config.TOKENIZER_TYPE = str(meta["tokenizer_type"])
+        except Exception:
+            pass
+    if "vocab_path" in meta and meta["vocab_path"]:
+        try:
+            Config.VOCAB_PATH = str(meta["vocab_path"])
+        except Exception:
+            pass
+
+
 def _load_tokenizer_for_inference():
     tok_type = str(getattr(Config, "TOKENIZER_TYPE", "bert")).lower().strip()
     if tok_type == "simple":
@@ -134,6 +161,16 @@ def run_single_prediction(args):
     if not os.path.exists(args.test_csv):
         raise FileNotFoundError(f"Test CSV not found: {args.test_csv}")
 
+    state_dict, meta = _load_checkpoint(args.model_path, device)
+    if meta:
+        print(
+            "Loaded checkpoint meta: "
+            f"tokenizer_type={meta.get('tokenizer_type')} "
+            f"decoder_type={meta.get('decoder_type')} "
+            f"vocab_path={meta.get('vocab_path')}"
+        )
+    _apply_meta_overrides(meta)
+
     tokenizer = _load_tokenizer_for_inference()
     transform = transforms.Compose(
         [
@@ -163,7 +200,7 @@ def run_single_prediction(args):
     sample = dataset[args.index]
 
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
-    model.load_state_dict(torch.load(args.model_path, map_location=device))
+    model.load_state_dict(state_dict)
     model.eval()
 
     if hasattr(model.decoder, "pad_token_id"):
@@ -189,7 +226,10 @@ def run_single_prediction(args):
 
     # Ground truth: future_motion đã được normalize trong dataset (speed/30, course/360)
     gt_motion_values = denormalize_future_motion(sample["future_motion"])
-    gt_caption = tokenizer.decode(sample["caption"], skip_special_tokens=True).strip()
+    if "caption_text" in sample:
+        gt_caption = str(sample["caption_text"]).strip()
+    else:
+        gt_caption = tokenizer.decode(sample["caption"], skip_special_tokens=True).strip()
 
     print("\n" + "=" * 60)
     print(f"  Sample index : {args.index}")

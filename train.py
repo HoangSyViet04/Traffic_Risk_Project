@@ -16,6 +16,64 @@ from src.dataset import DrivingRiskDataset
 from src.models.full_model import DrivingRiskModel
 from src.utils import build_imbalance_weights
 from src.simple_tokenizer import SimpleVocabTokenizer
+from src.init import apply_paper_init
+
+
+def _as_device(device):
+    if isinstance(device, str):
+        return torch.device(device)
+    return device
+
+
+def _sanity_check_batch(batch, *, tokenizer, device):
+    images = batch["video"]
+    sensors = batch["sensor"]
+    future_targets = batch["future_motion"]
+    captions = batch["caption"]
+
+    if images.ndim != 5:
+        raise ValueError(f"video must be [B,T,C,H,W], got {tuple(images.shape)}")
+    if sensors.ndim != 3:
+        raise ValueError(f"sensor must be [B,T,D], got {tuple(sensors.shape)}")
+    if future_targets.ndim != 3:
+        raise ValueError(f"future_motion must be [B,S,2], got {tuple(future_targets.shape)}")
+    if captions.ndim != 2:
+        raise ValueError(f"caption must be [B,L], got {tuple(captions.shape)}")
+
+    b, t, _c, _h, _w = images.shape
+    if t != int(Config.MAX_FRAMES):
+        raise ValueError(f"frames mismatch: {t} vs Config.MAX_FRAMES={Config.MAX_FRAMES}")
+    if tuple(sensors.shape) != (b, t, int(Config.SENSOR_DIM)):
+        raise ValueError(
+            f"sensor shape mismatch: {tuple(sensors.shape)} expected {(b, t, int(Config.SENSOR_DIM))}"
+        )
+    if future_targets.shape[0] != b or future_targets.shape[1] != int(Config.FUTURE_STEPS) or future_targets.shape[2] != 2:
+        raise ValueError(
+            f"future_motion shape mismatch: {tuple(future_targets.shape)} expected [B,{Config.FUTURE_STEPS},2]"
+        )
+
+    if captions.dtype != torch.long:
+        raise ValueError(f"caption dtype must be torch.long, got {captions.dtype}")
+    for name, tens in ("video", images), ("sensor", sensors), ("future_motion", future_targets):
+        if tens.dtype not in (torch.float16, torch.float32, torch.float64):
+            raise ValueError(f"{name} dtype should be float, got {tens.dtype}")
+        if not torch.isfinite(tens).all():
+            raise ValueError(f"{name} contains NaN/Inf")
+
+    if getattr(tokenizer, "pad_token_id", None) is None:
+        raise ValueError("tokenizer.pad_token_id is None; please use a tokenizer with padding")
+
+    # Smoke forward pass on a single sample to catch shape incompatibilities early
+    model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
+    model.eval()
+    with torch.no_grad():
+        vocab_out, future_out = model(
+            images[:1].to(device),
+            sensors[:1].to(device),
+            captions[:1].to(device),
+        )
+    if vocab_out.ndim != 3 or future_out.ndim != 3:
+        raise RuntimeError("Sanity forward produced unexpected output shapes")
 
 
 def _build_tokenizer(train_texts):
@@ -36,9 +94,7 @@ def _build_tokenizer(train_texts):
 
 def train():
     # --- 1. THIẾT LẬP MÔI TRƯỜNG & LOGGING ---
-    device = Config.DEVICE
-    if isinstance(device, str):
-        device = torch.device(device)
+    device = _as_device(Config.DEVICE)
     print(f"Dang su dung thiet bi: {device}")
 
     model_dir = os.path.dirname(getattr(Config, "MODEL_SAVE_PATH", "saved_models/best_model.pth")) or "saved_models"
@@ -142,6 +198,13 @@ def train():
         num_workers=0,
     )
     val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=0) 
+
+    # Fail-fast sanity check on the first batch
+    first_batch = next(iter(train_loader), None)
+    if first_batch is None:
+        raise RuntimeError("Train loader is empty")
+    _sanity_check_batch(first_batch, tokenizer=tokenizer, device=device)
+    print("Sanity-check batch: OK")
     # --- 3. KHỞI TẠO MODEL ---
     print("Dang khoi tao Model...")
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
@@ -162,6 +225,11 @@ def train():
         model.encoder.load_pretrained_cnn(pretrain_path)
     else:
         print(f"CẢNH BÁO: Không tìm thấy {pretrain_path}! Mô hình sẽ train CNN từ đầu.")
+
+    # Paper-style init (Xavier) for non-CNN parts
+    if str(getattr(Config, "INIT_MODE", "")).lower().strip() == "xavier_paper":
+        apply_paper_init(model, skip_cnn=True)
+        print("Applied paper init: Xavier/orthogonal (skip CNN)")
     
     # --- 4. CẤU HÌNH HUẤN LUYỆN ---
     label_smoothing = float(getattr(Config, "LABEL_SMOOTHING", 0.0))
@@ -322,7 +390,18 @@ def train():
         if avg_val_loss < (best_val_loss - min_delta):
             best_val_loss = avg_val_loss
             epochs_no_improve = 0 # Trả bộ đếm về 0 vì model vừa tiến bộ
-            torch.save(model.state_dict(), Config.MODEL_SAVE_PATH)
+            ckpt = {
+                "model_state_dict": model.state_dict(),
+                "meta": {
+                    "tokenizer_type": str(getattr(Config, "TOKENIZER_TYPE", "bert")),
+                    "decoder_type": str(getattr(Config, "DECODER_TYPE", "lstm")),
+                    "vocab_path": getattr(Config, "VOCAB_SAVE_PATH", None) or getattr(Config, "VOCAB_PATH", None),
+                    "max_len": 30,
+                    "max_frames": int(Config.MAX_FRAMES),
+                    "future_steps": int(Config.FUTURE_STEPS),
+                },
+            }
+            torch.save(ckpt, Config.MODEL_SAVE_PATH)
             print(f"Da luu Model xuat sac nhat (Val Loss giam xuong: {best_val_loss:.4f})")
         else:
             epochs_no_improve += 1

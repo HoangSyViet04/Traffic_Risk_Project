@@ -18,13 +18,16 @@ class DrivingRiskModel(nn.Module):
         # 1. Encoder: Image + Sensor -> context_vector [B, 1024]
         self.encoder = MultimodalEncoder(
             hidden_size=config.HIDDEN_SIZE,
-            sensor_dim=config.SENSOR_DIM
+            sensor_dim=config.SENSOR_DIM,
+            freeze_cnn=True,
+            lstm_dropout=float(getattr(config, "ENCODER_LSTM_DROPOUT", 0.3)),
         )
 
         # 2. Action Head: context_vector [B, 1024] -> future_flat [B, 10]
         self.action_head = ActionRegressor(
             hidden_size=config.HIDDEN_SIZE,
-            future_steps=config.FUTURE_STEPS
+            future_steps=config.FUTURE_STEPS,
+            dropout=float(getattr(config, "ACTION_DROPOUT", 0.3)),
         )
 
         # 3. Decoder: (context + future) [B, 1034] -> vocab_outputs [B, SeqLen, vocab_size]
@@ -48,6 +51,7 @@ class DrivingRiskModel(nn.Module):
                 hidden_size=config.HIDDEN_SIZE,
                 vocab_size=vocab_size,
                 embed_size=config.EMBED_SIZE,
+                dropout=float(getattr(config, "DECODER_DROPOUT", 0.3)),
             )
 
     def forward(self, images, sensors, captions):
