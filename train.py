@@ -8,12 +8,35 @@ from tqdm import tqdm
 import os
 import pandas as pd
 from sklearn.model_selection import train_test_split
-
+import torch.nn.functional as F
 # Import các module chúng ta đã viết
 from src.config import Config
 from src.dataset import DrivingRiskDataset
 from src.models.full_model import DrivingRiskModel
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss: Trị tận gốc bệnh học vẹt (Class Imbalance).
+    Bóp nghẹt loss của những từ dễ (văn mẫu), phóng to loss của những từ hiếm (biển báo, xe đỗ).
+    """
+    def __init__(self, gamma=2.0, ignore_index=-100):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        # Dùng reduction='none' để lấy loss của từng từ riêng lẻ
+        self.ce = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none')
+
+    def forward(self, inputs, targets):
+        # Tính Cross Entropy cơ bản
+        ce_loss = self.ce(inputs, targets)
+        
+        # Lấy xác suất dự đoán (pt)
+        pt = torch.exp(-ce_loss)
+        
+        # Ép trọng số Focal: Từ nào đoán càng đúng (pt cao) -> (1-pt) càng nhỏ -> Loss bị triệt tiêu
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        
+        return focal_loss.mean()
+    
 def train():
     # --- 1. THIẾT LẬP MÔI TRƯỜNG & LOGGING ---
     device = Config.DEVICE
@@ -92,7 +115,7 @@ def train():
         print(f"CẢNH BÁO: Không tìm thấy {pretrain_path}! Mô hình sẽ train CNN từ đầu.")
     
     # --- 4. CẤU HÌNH HUẤN LUYỆN ---
-    criterion_caption = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
+    criterion_caption = FocalLoss(gamma=2.0, ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
     criterion_motion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE, weight_decay= 1e-5)
 
