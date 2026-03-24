@@ -60,7 +60,7 @@ def train():
     full_df = pd.read_csv(Config.TRAIN_CSV)
     
     # Chia lan 1: Lay 80% cho Train, 20% cho tam (temp)
-    train_df, temp_df = train_test_split(full_df, test_size=0.20, random_state=42)
+    train_df, temp_df = train_test_split(full_df, test_size=0.15, random_state=42)
     
     # Chia lan 2: Chia doi 20% temp thanh 10% Val va 10% Test
     val_df, test_df = train_test_split(temp_df, test_size=0.50, random_state=42)
@@ -112,7 +112,7 @@ def train():
         print(f"CẢNH BÁO: Không tìm thấy {pretrain_path}! Mô hình sẽ train CNN từ đầu.")
     
     # --- 4. CẤU HÌNH HUẤN LUYỆN ---
-    criterion_caption = FocalLoss(gamma=2.0, ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
+    criterion_caption = FocalLoss(gamma=4.0, ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
     criterion_motion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE, weight_decay= 1e-5)
 

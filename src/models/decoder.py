@@ -62,10 +62,10 @@ class CaptionDecoder(nn.Module):
         # --- CHUẨN BỊ BỘ NHỚ (MEMORY) ---
         memory = self.memory_projection(encoder_outputs)  # [B, Frames, 256]
 
-        # --- ĐOẠN VÁ LỖI BƯỚC 1 (TRÁNH COPY LÚC TRAIN) ---
-        decoder_context = torch.cat((context, future_flat), dim=1)
+        # Concat (nối) context [B, 1024] và future_flat [B, 10] lại với nhau
+        decoder_context = torch.cat((context, future_flat), dim=1) ## -> Tạo thành cục [B, 1034]
         
-        # Tạo "Mồi nhử" bằng vector Tổng kết Hình Ảnh
+        # Sau đó mới đem cục 1034 chiều này đi ép xuống 256 chiều làm "Mồi Hình Ảnh"
         ctx_proj = self.context_projection(decoder_context).unsqueeze(1) # [B, 1, 256]
 
         # Cắt bỏ chữ cuối cùng, lùi chuỗi lại 1 nhịp 
@@ -135,3 +135,4 @@ class CaptionDecoder(nn.Module):
                 break
                 
         return beams[0][1]
+    

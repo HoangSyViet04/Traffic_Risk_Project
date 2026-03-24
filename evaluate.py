@@ -138,7 +138,7 @@ def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_l
             start_token_id=start_token,
             end_token_id=end_token,
             max_len=max_len,
-            beam_size=5 
+            beam_size=3
         )
 
     pred_caption = tokenizer.decode(best_token_ids, skip_special_tokens=True).strip()
