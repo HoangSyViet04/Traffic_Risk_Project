@@ -22,11 +22,14 @@ from src.simple_tokenizer import SimpleVocabTokenizer
 def _load_tokenizer_for_inference():
     tok_type = str(getattr(Config, "TOKENIZER_TYPE", "bert")).lower().strip()
     if tok_type == "simple":
-        if not os.path.exists(Config.VOCAB_SAVE_PATH):
+        vocab_path = getattr(Config, "VOCAB_SAVE_PATH", None) or getattr(Config, "VOCAB_PATH", None)
+        if not vocab_path:
+            vocab_path = "saved_models/simple_vocab.json"
+        if not os.path.exists(vocab_path):
             raise FileNotFoundError(
-                f"Simple vocab not found at {Config.VOCAB_SAVE_PATH}. Run training once to create it."
+                f"Simple vocab not found at {vocab_path}. Run training once to create it."
             )
-        return SimpleVocabTokenizer.load(Config.VOCAB_SAVE_PATH)
+        return SimpleVocabTokenizer.load(vocab_path)
     return AutoTokenizer.from_pretrained("bert-base-uncased")
 
 
@@ -272,6 +275,8 @@ def generate_caption_and_motion_beam(
 
 def evaluate(args):
     device = Config.DEVICE
+    if isinstance(device, str):
+        device = torch.device(device)
     print(f"Device: {device}")
 
     if not os.path.exists(args.model_path):
@@ -299,8 +304,8 @@ def evaluate(args):
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
-        frame_fps=Config.FRAME_FPS,
-        telemetry_rate_mode=Config.TELEMETRY_RATE_MODE,
+        frame_fps=getattr(Config, "FRAME_FPS", 5),
+        telemetry_rate_mode=getattr(Config, "TELEMETRY_RATE_MODE", "auto"),
     )
 
     if args.max_samples is not None:
@@ -363,7 +368,10 @@ def evaluate(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate DrivingRisk model on test_data.csv")
     parser.add_argument("--model-path", type=str, default=Config.MODEL_SAVE_PATH)
-    parser.add_argument("--test-csv", type=str, default=os.path.join(os.path.dirname(Config.TRAIN_CSV), "test_data.csv"))
+    default_model_path = getattr(Config, "MODEL_SAVE_PATH", "saved_models/best_model.pth")
+    default_model_dir = os.path.dirname(default_model_path) or "saved_models"
+    default_test_csv = getattr(Config, "TEST_CSV", None) or os.path.join(default_model_dir, "test_data.csv")
+    parser.add_argument("--test-csv", type=str, default=default_test_csv)
     parser.add_argument("--max-samples", type=int, default=None, help="Optional quick evaluation limit")
     parser.add_argument("--beam-size", type=int, default=3, help="Beam size for caption decoding (1 = greedy)")
     parser.add_argument("--length-penalty", type=float, default=0.7, help="Beam search length penalty")

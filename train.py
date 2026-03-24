@@ -24,9 +24,10 @@ def _build_tokenizer(train_texts):
     if tok_type == "simple":
         vocab_size = int(getattr(Config, "SIMPLE_VOCAB_SIZE", 4000))
         tokenizer = SimpleVocabTokenizer.build_from_texts(train_texts, vocab_size=vocab_size)
-        os.makedirs(os.path.dirname(Config.VOCAB_SAVE_PATH), exist_ok=True)
-        tokenizer.save(Config.VOCAB_SAVE_PATH)
-        print(f"Saved simple vocab tokenizer to: {Config.VOCAB_SAVE_PATH}")
+        vocab_path = getattr(Config, "VOCAB_SAVE_PATH", None) or getattr(Config, "VOCAB_PATH", "saved_models/simple_vocab.json")
+        os.makedirs(os.path.dirname(vocab_path), exist_ok=True)
+        tokenizer.save(vocab_path)
+        print(f"Saved simple vocab tokenizer to: {vocab_path}")
         return tokenizer
 
     # default: BERT tokenizer
@@ -35,12 +36,15 @@ def _build_tokenizer(train_texts):
 def train():
     # --- 1. THIẾT LẬP MÔI TRƯỜNG & LOGGING ---
     device = Config.DEVICE
+    if isinstance(device, str):
+        device = torch.device(device)
     print(f"Dang su dung thiet bi: {device}")
-    
-    os.makedirs(os.path.dirname(Config.MODEL_SAVE_PATH), exist_ok=True)
+
+    model_dir = os.path.dirname(getattr(Config, "MODEL_SAVE_PATH", "saved_models/best_model.pth")) or "saved_models"
+    os.makedirs(model_dir, exist_ok=True)
 
     # Khởi tạo file log để ghi nhận giá trị qua từng Epoch
-    log_file = os.path.join(os.path.dirname(Config.MODEL_SAVE_PATH), "training_log.csv")
+    log_file = os.path.join(model_dir, "training_log.csv")
     with open(log_file, "w", encoding="utf-8") as f:
         f.write("Epoch,Train_Loss,Val_Loss,Motion_Loss_Val,Caption_Loss_Val\n")
 
@@ -64,7 +68,8 @@ def train():
     print(f"So luong Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
 
     # Luu tap Test ra file rieng de danh cho buoc Evaluate (Tinh BLEU/CIDEr sau nay)
-    test_csv_path = os.path.join(os.path.dirname(Config.TRAIN_CSV), "test_data.csv")
+    # IMPORTANT: do NOT write into /kaggle/input (read-only). Prefer Config.TEST_CSV if provided.
+    test_csv_path = getattr(Config, "TEST_CSV", None) or os.path.join(model_dir, "test_data.csv")
     test_df.to_csv(test_csv_path, index=False)
     print(f"Da luu tap Test ra file rieng: {test_csv_path}")
 
@@ -80,8 +85,8 @@ def train():
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
-        frame_fps=Config.FRAME_FPS,
-        telemetry_rate_mode=Config.TELEMETRY_RATE_MODE,
+        frame_fps=getattr(Config, "FRAME_FPS", 5),
+        telemetry_rate_mode=getattr(Config, "TELEMETRY_RATE_MODE", "auto"),
     )
     train_dataset.data = train_df 
     
@@ -93,8 +98,8 @@ def train():
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
-        frame_fps=Config.FRAME_FPS,
-        telemetry_rate_mode=Config.TELEMETRY_RATE_MODE,
+        frame_fps=getattr(Config, "FRAME_FPS", 5),
+        telemetry_rate_mode=getattr(Config, "TELEMETRY_RATE_MODE", "auto"),
     )
     val_dataset.data = val_df 
 
