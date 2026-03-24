@@ -90,7 +90,7 @@ class MultimodalEncoder(nn.Module):
         # --- C. LSTM 2 TẦNG ---
         # lstm_out: [B, 16, 1024] (output tại mọi timestep)
         # h_n:      [2, B, 1024]  (hidden state cuối của mỗi tầng)
-        lstm_out, (h_n, c_n) = self.lstm(fused)
+        lstm_out, (h_n, c_n) = self.lstm(fused)   # lstm_out: [B, 16, 1024] (output tại mọi timestep)
 
         # Lấy hidden state cuối cùng của TẦNG THỨ 2 (index -1)
         context_vector = h_n[-1]                                 # shape: [B, 1024]

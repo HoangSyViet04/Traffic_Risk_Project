@@ -1,120 +1,124 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
-class TemporalAttention(nn.Module):
-    """Cơ chế Soft-Attention để quét qua các khung hình (frames)"""
-    def __init__(self, encoder_dim, decoder_dim, attention_dim):
-        super(TemporalAttention, self).__init__()
-        self.encoder_att = nn.Linear(encoder_dim, attention_dim)
-        self.decoder_att = nn.Linear(decoder_dim, attention_dim)
-        self.full_att = nn.Linear(attention_dim, 1)
+class PositionalEncoding(nn.Module):
+    """Bơm thêm nhận thức về Vị Trí (Thời gian) cho Transformer"""
+    def __init__(self, d_model, dropout=0.3, max_len=100):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, encoder_outputs, decoder_hidden):
-        # encoder_outputs: [B, Frames, 1024]
-        # decoder_hidden:  [B, 1024]
-        dec_proj = self.decoder_att(decoder_hidden).unsqueeze(1)    # [B, 1, att_dim]
-        enc_proj = self.encoder_att(encoder_outputs)                # [B, Frames, att_dim]
-        
-        # Tính điểm số cho từng frame
-        att_energy = self.full_att(torch.tanh(enc_proj + dec_proj)) # [B, Frames, 1]
-        alpha = F.softmax(att_energy, dim=1)                        # [B, Frames, 1]
-        
-        # Nhặt đặc trưng tương ứng với trọng số Attention
-        attention_context = (encoder_outputs * alpha).sum(dim=1)    # [B, 1024]
-        return attention_context, alpha
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)  
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
 
 class CaptionDecoder(nn.Module):
-    def __init__(self, context_dim, hidden_size, vocab_size, embed_size=256):
+    """Baby Transformer Decoder: Nhỏ gọn, tinh võ, chống học vẹt."""
+    def __init__(self, context_dim, hidden_size, vocab_size, embed_size=256, num_layers=2, nhead=4, dropout=0.3):
         super(CaptionDecoder, self).__init__()
         self.vocab_size = vocab_size
+        self.embed_size = embed_size
 
-        self.context_projection = nn.Linear(context_dim, embed_size)
-        # 1. Attention Module
-        self.attention = TemporalAttention(hidden_size, hidden_size, 512)
+        # 1. Chiếu các đặc trưng về cùng 256-d
+        self.context_projection = nn.Linear(context_dim, embed_size)      
+        self.memory_projection = nn.Linear(hidden_size, embed_size)       
 
-        # 2. Lớp khởi tạo bộ nhớ ban đầu cho LSTM từ context vector 1034-d
-        self.init_h = nn.Linear(context_dim, hidden_size)
-        self.init_c = nn.Linear(context_dim, hidden_size)
-
+        # 2. Xử lý Ngôn Ngữ
         self.embed = nn.Embedding(vocab_size, embed_size)
+        self.pos_encoder = PositionalEncoding(embed_size, dropout=dropout)
 
-        # 3. Đổi LSTM thành LSTMCell để chạy từng bước. 
-        # Input = Word Embedding (256) + Attention Context (1024)
-        self.lstm_cell = nn.LSTMCell(
-            input_size=embed_size + hidden_size, 
-            hidden_size=hidden_size
+        # 3. Lõi Transformer Decoder
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=embed_size, 
+            nhead=nhead, 
+            dim_feedforward=512,  
+            dropout=dropout,
+            batch_first=True
         )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
 
-        self.linear = nn.Linear(hidden_size, vocab_size)
+        self.linear = nn.Linear(embed_size, vocab_size)
+
+    def generate_square_subsequent_mask(self, sz, device):
+        """Mặt nạ che tương lai, ép Transformer phải học đàng hoàng"""
+        mask = (torch.triu(torch.ones((sz, sz), device=device)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
 
     def forward(self, encoder_outputs, context, future_flat, captions):
-        B = encoder_outputs.size(0)
+        device = captions.device
         seq_len = captions.size(1)
 
-        # Trộn ngữ cảnh và tương lai để làm bệ phóng ban đầu
-        decoder_context = torch.cat((context, future_flat), dim=1) # [B, 1034]
-        h = self.init_h(decoder_context) # [B, 1024]
-        c = self.init_c(decoder_context) # [B, 1024]
-        # Chuẩn bị trước các từ nhúng
-        embeddings = self.embed(captions) # [B, SeqLen, 256]
-        # Tạo vector hình ảnh để mồi cho nhịp t=0
-        context_proj = self.context_projection(decoder_context) # [B, 256]
+        # --- CHUẨN BỊ BỘ NHỚ (MEMORY) ---
+        memory = self.memory_projection(encoder_outputs)  # [B, Frames, 256]
 
-        outputs = torch.zeros(B, seq_len, self.vocab_size).to(context.device)
+        # --- ĐOẠN VÁ LỖI BƯỚC 1 (TRÁNH COPY LÚC TRAIN) ---
+        decoder_context = torch.cat((context, future_flat), dim=1)
+        
+        # Tạo "Mồi nhử" bằng vector Tổng kết Hình Ảnh
+        ctx_proj = self.context_projection(decoder_context).unsqueeze(1) # [B, 1, 256]
 
-        # Vòng lặp xé lẻ từng từ để dịch
-        for t in range(seq_len):
-            if t == 0:
-                # Ở nhịp đầu tiên, ép nó lấy Hình Ảnh làm đầu vào, không cho chép chữ
-                word_embed = context_proj
-            else:
-                # Ở các nhịp sau, đưa chữ của nhịp TRƯỚC (t-1) để dự đoán chữ HIỆN TẠI (t)
-                word_embed = embeddings[:, t-1, :]
-            
-            # CẤY MẮT ATTENTION: "Nhìn" xem frame nào quan trọng
-            att_context, _ = self.attention(encoder_outputs, h) # [B, 1024]
-            
-            # Gộp Từ Vựng + Hình ảnh lại đưa vào não (LSTM)
-            lstm_input = torch.cat([word_embed, att_context], dim=1) # [B, 1280]
-            
-            h, c = self.lstm_cell(lstm_input, (h, c))
-            outputs[:, t, :] = self.linear(h)
+        # Cắt bỏ chữ cuối cùng, lùi chuỗi lại 1 nhịp 
+        embeddings = self.embed(captions[:, :-1]) * math.sqrt(self.embed_size) # [B, SeqLen-1, 256]
+        
+        # Nối "Mồi Hình Ảnh" vào đầu chuỗi: [Hình Ảnh, Từ 1, Từ 2, ...] 
+        tgt_emb = torch.cat([ctx_proj, embeddings], dim=1) # [B, SeqLen, 256]
+        # ------------------------------------------------
 
-        return outputs
+        tgt_emb = self.pos_encoder(tgt_emb)
+        tgt_mask = self.generate_square_subsequent_mask(seq_len, device)
+
+        # --- DỊCH THUẬT ---
+        output = self.transformer_decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+        logits = self.linear(output) # [B, SeqLen, vocab_size]
+        return logits
 
     def generate_beam_search(self, encoder_outputs, context, future_flat, start_token_id, end_token_id, max_len=30, beam_size=3):
         device = context.device
         
-        # Khởi động não bộ
-        decoder_context = torch.cat((context, future_flat), dim=1)
-        h = self.init_h(decoder_context)
-        c = self.init_c(decoder_context)
-
-        context_proj = self.context_projection(decoder_context) 
-        att_context, _ = self.attention(encoder_outputs, h)
-        lstm_input = torch.cat([context_proj, att_context], dim=1)
-        h, c = self.lstm_cell(lstm_input, (h, c))
+        memory = self.memory_projection(encoder_outputs) # [1, Frames, 256]
         
-        beams = [(0.0, [start_token_id], h, c)]
+        decoder_context = torch.cat((context, future_flat), dim=1)
+        ctx_proj = self.context_projection(decoder_context).unsqueeze(1) # [1, 1, 256]
+        
+        beams = [(0.0, [start_token_id])]
         
         for step in range(max_len):
             new_beams = []
             
-            for score, tokens, h_prev, c_prev in beams:
+            for score, tokens in beams:
                 if tokens[-1] == end_token_id:
-                    new_beams.append((score, tokens, h_prev, c_prev))
+                    new_beams.append((score, tokens))
                     continue
                 
-                last_token = torch.tensor([tokens[-1]], dtype=torch.long, device=device)
-                emb = self.embed(last_token) 
+                # Biến đổi chuỗi từ đang có
+                tgt_tensor = torch.tensor([tokens], dtype=torch.long, device=device) # [1, L]
+                tgt_emb_words = self.embed(tgt_tensor) * math.sqrt(self.embed_size)
                 
-                att_context, _ = self.attention(encoder_outputs, h_prev)
-                lstm_input = torch.cat([emb, att_context], dim=1)
+                # --- ĐOẠN VÁ LỖI BƯỚC 2 (TRÁNH MÙ LÚC TEST) ---
+                # Nối Mồi Hình Ảnh vào trước chuỗi từ [Hình Ảnh, BOS, Từ 1, ...]
+                tgt_emb = torch.cat([ctx_proj, tgt_emb_words], dim=1) # [1, 1+L, 256]
+                # ----------------------------------------------
+
+                tgt_emb = self.pos_encoder(tgt_emb)
+                tgt_mask = self.generate_square_subsequent_mask(tgt_emb.size(1), device)
                 
-                h_next, c_next = self.lstm_cell(lstm_input, (h_prev, c_prev))
+                # Phóng Transformer
+                output = self.transformer_decoder(tgt_emb, memory, tgt_mask=tgt_mask)
                 
-                logits = self.linear(h_next)
+                # Chỉ lấy vị trí CUỐI CÙNG để dự đoán từ tiếp theo
+                last_out = output[:, -1, :] 
+                logits = self.linear(last_out)
                 log_probs = F.log_softmax(logits, dim=1)
                 
                 topk_log_probs, topk_indices = torch.topk(log_probs, beam_size, dim=1)
@@ -122,10 +126,11 @@ class CaptionDecoder(nn.Module):
                 for i in range(beam_size):
                     next_token = topk_indices[0, i].item()
                     next_score = score + topk_log_probs[0, i].item()
-                    new_beams.append((next_score, tokens + [next_token], h_next, c_next))
+                    new_beams.append((next_score, tokens + [next_token]))
             
             new_beams = sorted(new_beams, key=lambda x: x[0], reverse=True)
             beams = new_beams[:beam_size]
+            
             if all(b[1][-1] == end_token_id for b in beams):
                 break
                 
