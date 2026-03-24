@@ -8,6 +8,7 @@ from tqdm import tqdm
 import os
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from contextlib import nullcontext
 
 # Import các module chúng ta đã viết
 from src.config import Config
@@ -201,7 +202,17 @@ def train():
         )
 
     use_amp = bool(getattr(Config, "USE_AMP", True)) and (device.type == "cuda")
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    # Prefer new torch.amp API when available; fallback for older PyTorch
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+        autocast_ctx = lambda: torch.amp.autocast(device_type="cuda", enabled=use_amp)
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        autocast_ctx = lambda: torch.cuda.amp.autocast(enabled=use_amp)
+
+    if not use_amp:
+        autocast_ctx = lambda: nullcontext()
 
     best_val_loss = float('inf')
 
@@ -235,7 +246,7 @@ def train():
 
             optimizer.zero_grad(set_to_none=True)
 
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with autocast_ctx():
                 vocab_outputs, future_preds = model(images, sensors, captions)
 
                 # 1. Loss Vat ly
@@ -281,7 +292,7 @@ def train():
                 future_targets = batch['future_motion'].to(device)
                 captions = batch['caption'].to(device)
 
-                with torch.cuda.amp.autocast(enabled=use_amp):
+                with autocast_ctx():
                     vocab_outputs, future_preds = model(images, sensors, captions)
 
                     loss_motion = criterion_motion(future_preds, future_targets)
