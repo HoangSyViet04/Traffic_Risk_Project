@@ -23,12 +23,33 @@ class SingleFrameDataset(Dataset):
         telemetry_root,
         transform=None,
         timestamp_mode="mid",
+        frame_fps: int = 5,
+        telemetry_rate_mode: str = "auto",
     ):
         self.data = pd.read_csv(csv_file)
         self.images_root = images_root
         self.telemetry_root = telemetry_root
         self.transform = transform
         self.timestamp_mode = timestamp_mode
+        self.frame_fps = int(frame_fps)
+        self.telemetry_rate_mode = telemetry_rate_mode
+
+    def _resolve_telemetry_hz(self, locations_len: int) -> int:
+        mode = (self.telemetry_rate_mode or "auto").lower()
+        if mode in {"1hz", "1"}:
+            return 1
+        if mode in {"5fps", "5"}:
+            return 5
+        if mode in {"30fps", "30"}:
+            return 30
+        if mode != "auto":
+            return 1
+
+        if locations_len >= 600:
+            return 30
+        if locations_len >= 150:
+            return 5
+        return 1
 
     def __len__(self):
         return len(self.data)
@@ -50,7 +71,7 @@ class SingleFrameDataset(Dataset):
         t = self._pick_timestamp(start, end)
 
         # BDD-X frame naming: frame_{int(t*5)+1}.jpg
-        frame_idx = int(t * 5) + 1
+        frame_idx = int(t * self.frame_fps) + 1
         img_path = os.path.join(self.images_root, video_id, f"frame_{frame_idx}.jpg")
 
         if os.path.exists(img_path):
@@ -75,7 +96,8 @@ class SingleFrameDataset(Dataset):
                 locs = data.get("locations", [])
 
                 if len(locs) > 0:
-                    safe_idx = min(int(t), len(locs) - 1)
+                    tel_hz = self._resolve_telemetry_hz(len(locs))
+                    safe_idx = min(int(t * tel_hz), len(locs) - 1)
                     raw_speed = float(locs[safe_idx].get("speed", 0.0))
                     raw_course = float(locs[safe_idx].get("course", 0.0))
 

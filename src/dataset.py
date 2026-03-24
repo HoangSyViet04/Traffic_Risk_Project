@@ -6,8 +6,44 @@ import os
 from PIL import Image
 import numpy as np
 
+
+def _resolve_telemetry_hz(rate_mode: str, locations_len: int, *, default_hz: int = 1) -> int:
+    """Heuristic mapping from telemetry length -> sampling rate.
+
+    BDD-X telemetry can be ~1Hz (GPS-like) or per-frame (30fps). Since we don't
+    always have the full video duration here, we use a simple length-based rule.
+    """
+    mode = (rate_mode or "auto").lower()
+    if mode in {"1hz", "1"}:
+        return 1
+    if mode in {"5fps", "5"}:
+        return 5
+    if mode in {"30fps", "30"}:
+        return 30
+    if mode != "auto":
+        return int(default_hz)
+
+    # Auto heuristic
+    if locations_len >= 600:
+        return 30
+    if locations_len >= 150:
+        return 5
+    return 1
+
+
 class DrivingRiskDataset(Dataset):
-    def __init__(self, csv_file, images_root, telemetry_root, tokenizer, transform=None, max_frames=16, future_steps=5):
+    def __init__(
+        self,
+        csv_file,
+        images_root,
+        telemetry_root,
+        tokenizer,
+        transform=None,
+        max_frames=16,
+        future_steps=5,
+        frame_fps: int = 5,
+        telemetry_rate_mode: str = "auto",
+    ):
         """
         Args:
             csv_file: Đường dẫn đến processed_train.csv
@@ -24,6 +60,8 @@ class DrivingRiskDataset(Dataset):
         self.transform = transform
         self.max_frames = max_frames
         self.future_steps = future_steps
+        self.frame_fps = int(frame_fps)
+        self.telemetry_rate_mode = telemetry_rate_mode
 
     def __len__(self):
         return len(self.data)
@@ -49,7 +87,7 @@ class DrivingRiskDataset(Dataset):
         
         for t in frame_indices:
             # fps=5 (frame_1 = 0s, frame_2 = 0.2s...)
-            f_idx = int(t * 5) + 1
+            f_idx = int(t * self.frame_fps) + 1
             img_path = os.path.join(self.img_root, video_id, f"frame_{f_idx}.jpg")
             
             # Fallback nếu không có ảnh (màn hình đen)
@@ -82,13 +120,16 @@ class DrivingRiskDataset(Dataset):
                     data = json.load(f)
                 
                 full_log = data.get('locations', [])
+
+                tel_hz = _resolve_telemetry_hz(self.telemetry_rate_mode, len(full_log), default_hz=1)
+                dt = 1.0 / float(max(tel_hz, 1))
                 
                 # Biến chốt chặn an toàn để không bị lỗi index out of range
                 max_log_idx = max(0, len(full_log) - 1)
                 
                 # -- Lấy dữ liệu QUÁ KHỨ cho từng frame (Dùng 3 thông số) --
                 for t in frame_indices:
-                    idx = int(t)
+                    idx = int(t * tel_hz)
                     safe_idx = min(idx, max_log_idx)
                     
                     if len(full_log) > 0:
@@ -98,7 +139,7 @@ class DrivingRiskDataset(Dataset):
                         # TÍNH GIA TỐC (dựa trên chênh lệch 1 giây)
                         if safe_idx > 0:
                             prev_speed = full_log[safe_idx - 1].get('speed', 0)
-                            raw_accel = (raw_speed - prev_speed) / 1.0
+                            raw_accel = (raw_speed - prev_speed) / dt
                         else:
                             raw_accel = 0.0
                             
@@ -116,7 +157,7 @@ class DrivingRiskDataset(Dataset):
                 future_indices = np.linspace(mid, end, num=self.future_steps)
                 
                 for i, t_val in enumerate(future_indices):
-                    target_idx = int(t_val)
+                    target_idx = int(t_val * tel_hz)
                     safe_idx = min(target_idx, max_log_idx)
                     
                     if len(full_log) > 0:

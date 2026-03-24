@@ -16,7 +16,7 @@ class ActionRegressor(nn.Module):
             -> FC3: [B, 10]
     """
 
-    def __init__(self, hidden_size=1024, future_steps=5, output_dim=2):
+    def __init__(self, hidden_size=1024, future_steps=5, output_dim=2, dropout: float = 0.3):
         super(ActionRegressor, self).__init__()
         self.future_steps = future_steps
         self.output_dim = output_dim
@@ -37,6 +37,7 @@ class ActionRegressor(nn.Module):
         self.fc2 = nn.Linear(100, 50)
         self.fc3 = nn.Linear(50, total_output)
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(float(dropout))
 
     def forward(self, context_vector):
         """
@@ -56,10 +57,10 @@ class ActionRegressor(nn.Module):
         hidden = h_n[-1]
 
         # [B, 1164] -> [B, 100]
-        hidden = self.relu(self.fc1(hidden))
+        hidden = self.dropout(self.relu(self.fc1(hidden)))
 
         # [B, 100] -> [B, 50]
-        hidden = self.relu(self.fc2(hidden))
+        hidden = self.dropout(self.relu(self.fc2(hidden)))
 
         # [B, 50] -> [B, 10]
         future_flat = self.fc3(hidden)

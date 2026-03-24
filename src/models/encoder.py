@@ -13,7 +13,7 @@ class MultimodalEncoder(nn.Module):
     - LSTM 2 tầng: input_size=15363, hidden_size=1024
     """
 
-    def __init__(self, hidden_size=1024, sensor_dim=3, freeze_cnn=True):
+    def __init__(self, hidden_size=1024, sensor_dim=3, freeze_cnn=True, lstm_dropout: float = 0.3):
         super(MultimodalEncoder, self).__init__()
 
         # --- NHÁNH HÌNH ẢNH (CNN Feature Extractor) ---
@@ -29,7 +29,8 @@ class MultimodalEncoder(nn.Module):
             input_size=fusion_input_dim,  # 15363
             hidden_size=hidden_size,      # 1024
             num_layers=2,                 # 2 tầng LSTM
-            batch_first=True
+            batch_first=True,
+            dropout=float(lstm_dropout),
         )
 
     def load_pretrained_cnn(self, path):

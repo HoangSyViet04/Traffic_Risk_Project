@@ -43,6 +43,8 @@ def build_pretrain_loaders(batch_size=None, val_ratio=0.1):
         telemetry_root=Config.TELEMETRY_ROOT,
         transform=transform,
         timestamp_mode="mid",
+        frame_fps=Config.FRAME_FPS,
+        telemetry_rate_mode=Config.TELEMETRY_RATE_MODE,
     )
     train_ds.data = train_df.reset_index(drop=True)
 
@@ -52,6 +54,8 @@ def build_pretrain_loaders(batch_size=None, val_ratio=0.1):
         telemetry_root=Config.TELEMETRY_ROOT,
         transform=transform,
         timestamp_mode="mid",
+        frame_fps=Config.FRAME_FPS,
+        telemetry_rate_mode=Config.TELEMETRY_RATE_MODE,
     )
     val_ds.data = val_df.reset_index(drop=True)
 

@@ -9,7 +9,7 @@ class CaptionDecoder(nn.Module):
     Dùng LSTM 1 tầng (hidden=1024) với Teacher Forcing để sinh caption.
     """
 
-    def __init__(self, context_dim, hidden_size, vocab_size, embed_size=256):
+    def __init__(self, context_dim, hidden_size, vocab_size, embed_size=256, dropout: float = 0.3):
         """
         Args:
             context_dim: Kích thước vector ngữ cảnh đầu vào (1034 = 1024 + 10)
@@ -21,6 +21,8 @@ class CaptionDecoder(nn.Module):
 
         # 1. Word Embedding: token ID -> vector
         self.embed = nn.Embedding(vocab_size, embed_size)
+
+        self.dropout = nn.Dropout(float(dropout))
 
         # 2. Chiếu context (1034-d) về embed_size (256-d) để concat với word embeddings
         self.context_projection = nn.Linear(context_dim, embed_size)
@@ -47,10 +49,10 @@ class CaptionDecoder(nn.Module):
         # Teacher Forcing: bỏ từ CUỐI, dự đoán từ TIẾP THEO
         # Input:  [CLS] The car is ...
         # Target: The car is ... [SEP]
-        embeddings = self.embed(captions[:, :-1])                # shape: [B, SeqLen-1, 256]
+        embeddings = self.dropout(self.embed(captions[:, :-1]))  # shape: [B, SeqLen-1, 256]
 
         # Chiếu context về embed_size
-        context_proj = self.context_projection(context)          # shape: [B, 256]
+        context_proj = self.dropout(self.context_projection(context))  # shape: [B, 256]
         context_proj = context_proj.unsqueeze(1)                 # shape: [B, 1, 256]
 
         # Nối context vào ĐẦU chuỗi: [Context, Word1, Word2, ...]
@@ -58,6 +60,7 @@ class CaptionDecoder(nn.Module):
 
         # Chạy qua LSTM
         hiddens, _ = self.lstm(inputs)                           # shape: [B, SeqLen, 1024]
+        hiddens = self.dropout(hiddens)
 
         # Tính xác suất từ
         outputs = self.linear(hiddens)                           # shape: [B, SeqLen, vocab_size]

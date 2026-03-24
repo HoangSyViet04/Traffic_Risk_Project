@@ -58,7 +58,7 @@ def main():
         # Tích hợp thanh tiến trình tqdm để xem tiến độ chạy
         list(tqdm(executor.map(process_image, tasks), total=total_images, desc="Đang Resize"))
         
-    print("\n🎉 HOÀN TẤT! Hãy kiểm tra dung lượng thư mục mới, nó sẽ nhẹ đi rất nhiều!")
+    print("\nHOÀN TẤT! Hãy kiểm tra dung lượng thư mục mới, nó sẽ nhẹ đi rất nhiều!")
 
 if __name__ == "__main__":
     main()

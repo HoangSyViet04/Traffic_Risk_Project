@@ -3,6 +3,7 @@ import torch.nn as nn
 from src.models.encoder import MultimodalEncoder
 from src.models.action_head import ActionRegressor
 from src.models.decoder import CaptionDecoder
+from src.models.transformer_decoder import TransformerCaptionDecoder
 
 
 class DrivingRiskModel(nn.Module):
@@ -28,12 +29,26 @@ class DrivingRiskModel(nn.Module):
 
         # 3. Decoder: (context + future) [B, 1034] -> vocab_outputs [B, SeqLen, vocab_size]
         context_dim = config.HIDDEN_SIZE + (config.FUTURE_STEPS * 2)  # 1024 + 10 = 1034
-        self.decoder = CaptionDecoder(
-            context_dim=context_dim,
-            hidden_size=config.HIDDEN_SIZE,
-            vocab_size=vocab_size,
-            embed_size=config.EMBED_SIZE
-        )
+        decoder_type = str(getattr(config, "DECODER_TYPE", "lstm")).lower().strip()
+        if decoder_type == "transformer":
+            self.decoder = TransformerCaptionDecoder(
+                context_dim=context_dim,
+                vocab_size=vocab_size,
+                d_model=int(getattr(config, "TRANSFORMER_D_MODEL", 512)),
+                nhead=int(getattr(config, "TRANSFORMER_NHEAD", 8)),
+                num_layers=int(getattr(config, "TRANSFORMER_NUM_LAYERS", 4)),
+                dim_feedforward=int(getattr(config, "TRANSFORMER_FF_DIM", 2048)),
+                dropout=float(getattr(config, "TRANSFORMER_DROPOUT", 0.1)),
+                max_len=128,
+                pad_token_id=getattr(config, "PAD_TOKEN_ID", None),
+            )
+        else:
+            self.decoder = CaptionDecoder(
+                context_dim=context_dim,
+                hidden_size=config.HIDDEN_SIZE,
+                vocab_size=vocab_size,
+                embed_size=config.EMBED_SIZE,
+            )
 
     def forward(self, images, sensors, captions):
         """

@@ -16,6 +16,18 @@ from transformers import AutoTokenizer
 from src.config import Config
 from src.dataset import DrivingRiskDataset
 from src.models.full_model import DrivingRiskModel
+from src.simple_tokenizer import SimpleVocabTokenizer
+
+
+def _load_tokenizer_for_inference():
+    tok_type = str(getattr(Config, "TOKENIZER_TYPE", "bert")).lower().strip()
+    if tok_type == "simple":
+        if not os.path.exists(Config.VOCAB_SAVE_PATH):
+            raise FileNotFoundError(
+                f"Simple vocab not found at {Config.VOCAB_SAVE_PATH}. Run training once to create it."
+            )
+        return SimpleVocabTokenizer.load(Config.VOCAB_SAVE_PATH)
+    return AutoTokenizer.from_pretrained("bert-base-uncased")
 
 
 def _safe_word_tokenize(text: str) -> List[str]:
@@ -143,38 +155,118 @@ def official_cider_score_if_available(references: List[str], hypotheses: List[st
 
 
 def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_len=30):
+    return generate_caption_and_motion_beam(
+        model,
+        tokenizer,
+        images,
+        sensors,
+        device,
+        max_len=max_len,
+        beam_size=1,
+        length_penalty=0.7,
+    )
+
+
+def generate_caption_and_motion_beam(
+    model,
+    tokenizer,
+    images,
+    sensors,
+    device,
+    *,
+    max_len: int = 30,
+    beam_size: int = 3,
+    length_penalty: float = 0.7,
+):
+    """Greedy/beam search decoding.
+
+    beam_size=1 behaves like greedy.
+    """
     model.eval()
 
     with torch.no_grad():
         context = model.encoder(images, sensors)
         future_flat = model.action_head(context)
         future_pred = model.action_head.reshape_prediction(future_flat)
-        decoder_context = torch.cat((context, future_flat), dim=1)
+        decoder_context_1 = torch.cat((context, future_flat), dim=1)  # [1, 1034]
 
-    start_token = tokenizer.cls_token_id
-    end_token = tokenizer.sep_token_id
-    generated_ids = [start_token]
+    start_token = int(tokenizer.cls_token_id)
+    end_token = int(tokenizer.sep_token_id)
+    pad_token = int(tokenizer.pad_token_id) if tokenizer.pad_token_id is not None else None
+
+    # Each beam: (token_ids, logprob_sum, ended)
+    beams = [([start_token], 0.0, False)]
+
+    def length_norm(score: float, length: int) -> float:
+        if length_penalty is None:
+            return score
+        lp = float(length_penalty)
+        if lp <= 0:
+            return score
+        # GNMT-style length penalty
+        denom = ((5.0 + float(length)) / 6.0) ** lp
+        return score / denom
 
     for _ in range(max_len - 1):
-        # Decoder nội bộ luôn gọi captions[:, :-1] nên cần thêm 1 dummy token
-        # ở cuối để offset đúng vị trí. Dummy PAD bị cắt bỏ trước khi vào LSTM
-        # nên không ảnh hưởng gì đến hidden state. output[-1] lúc đó đúng là
-        # vị trí dự đoán token tiếp theo dựa trên generated_ids[-1].
-        padded_input = torch.cat([
-            torch.tensor([generated_ids], dtype=torch.long, device=device),
-            torch.zeros(1, 1, dtype=torch.long, device=device),   # dummy PAD, bị slice trước khi vào LSTM
-        ], dim=1)
+        all_candidates = []
 
-        with torch.no_grad():
-            vocab_outputs = model.decoder(decoder_context, padded_input)
-            next_token_id = int(vocab_outputs[0, -1, :].argmax().item())
-
-        if next_token_id == end_token:
+        # Batch decode all unfinished beams in one forward for speed
+        active = [(i, b) for i, b in enumerate(beams) if not b[2]]
+        if not active:
             break
 
-        generated_ids.append(next_token_id)
+        prefix_batch = []
+        for _, (seq, _, _) in active:
+            prefix_batch.append(seq)
 
-    pred_caption = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        max_prefix_len = max(len(x) for x in prefix_batch)
+        prefix_tensor = torch.full(
+            (len(prefix_batch), max_prefix_len),
+            fill_value=pad_token if pad_token is not None else 0,
+            dtype=torch.long,
+            device=device,
+        )
+        for row_i, seq in enumerate(prefix_batch):
+            prefix_tensor[row_i, : len(seq)] = torch.tensor(seq, dtype=torch.long, device=device)
+
+        # Add dummy token so decoder's captions[:, :-1] keeps the last real token
+        padded_input = torch.cat(
+            [prefix_tensor, torch.zeros(len(prefix_batch), 1, dtype=torch.long, device=device)],
+            dim=1,
+        )
+
+        decoder_context = decoder_context_1.expand(len(prefix_batch), -1)
+        with torch.no_grad():
+            vocab_outputs = model.decoder(decoder_context, padded_input)  # [B, T, V]
+            logits = vocab_outputs[:, -1, :]  # next-token logits
+            log_probs = torch.log_softmax(logits, dim=-1)
+            if pad_token is not None:
+                log_probs[:, pad_token] = -1e9
+
+            topk = torch.topk(log_probs, k=max(beam_size, 1), dim=-1)
+
+        # Expand candidates
+        for local_idx, (beam_idx, (seq, score, _)) in enumerate(active):
+            for tok_id, tok_lp in zip(topk.indices[local_idx].tolist(), topk.values[local_idx].tolist()):
+                new_seq = seq + [int(tok_id)]
+                new_score = float(score) + float(tok_lp)
+                ended = int(tok_id) == end_token
+                all_candidates.append((new_seq, new_score, ended))
+
+        # Carry over already-ended beams
+        for seq, score, ended in beams:
+            if ended:
+                all_candidates.append((seq, score, True))
+
+        # Select best beams by normalized score
+        all_candidates.sort(key=lambda x: length_norm(x[1], len(x[0])), reverse=True)
+        beams = all_candidates[: max(beam_size, 1)]
+
+        if all(b[2] for b in beams):
+            break
+
+    best_seq, _, _ = max(beams, key=lambda x: length_norm(x[1], len(x[0])))
+    pred_caption = tokenizer.decode(best_seq, skip_special_tokens=True).strip()
     return pred_caption, future_pred.squeeze(0)
 
 
@@ -183,11 +275,14 @@ def evaluate(args):
     print(f"Device: {device}")
 
     if not os.path.exists(args.model_path):
-        raise FileNotFoundError(f"Model file not found: {args.model_path}")
+        raise FileNotFoundError(
+            f"Model file not found: {args.model_path}. "
+            f"Train first (python train.py) or pass --model-path to an existing checkpoint."
+        )
     if not os.path.exists(args.test_csv):
         raise FileNotFoundError(f"Test CSV not found: {args.test_csv}")
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    tokenizer = _load_tokenizer_for_inference()
     transform = transforms.Compose(
         [
             transforms.Resize(Config.IMAGE_SIZE),
@@ -204,6 +299,8 @@ def evaluate(args):
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
+        frame_fps=Config.FRAME_FPS,
+        telemetry_rate_mode=Config.TELEMETRY_RATE_MODE,
     )
 
     if args.max_samples is not None:
@@ -214,6 +311,12 @@ def evaluate(args):
     model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
     model.eval()
+
+    if hasattr(model.decoder, "pad_token_id"):
+        try:
+            model.decoder.pad_token_id = tokenizer.pad_token_id
+        except Exception:
+            pass
 
     mse_criterion = nn.MSELoss(reduction="mean")
     mse_scores = []
@@ -227,7 +330,16 @@ def evaluate(args):
         sensors = batch["sensor"].to(device)
         future_targets = batch["future_motion"].to(device)
 
-        pred_caption, pred_motion = generate_caption_and_motion(model, tokenizer, images, sensors, device)
+        pred_caption, pred_motion = generate_caption_and_motion_beam(
+            model,
+            tokenizer,
+            images,
+            sensors,
+            device,
+            max_len=30,
+            beam_size=int(args.beam_size),
+            length_penalty=float(args.length_penalty),
+        )
 
         mse_value = mse_criterion(pred_motion.unsqueeze(0), future_targets).item()
         mse_scores.append(mse_value)
@@ -253,4 +365,6 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default=Config.MODEL_SAVE_PATH)
     parser.add_argument("--test-csv", type=str, default=os.path.join(os.path.dirname(Config.TRAIN_CSV), "test_data.csv"))
     parser.add_argument("--max-samples", type=int, default=None, help="Optional quick evaluation limit")
+    parser.add_argument("--beam-size", type=int, default=3, help="Beam size for caption decoding (1 = greedy)")
+    parser.add_argument("--length-penalty", type=float, default=0.7, help="Beam search length penalty")
     evaluate(parser.parse_args())

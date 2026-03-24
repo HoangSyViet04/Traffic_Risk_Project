@@ -1,20 +1,15 @@
-# Near-Future Driving Risk Captioning 🚗
-
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.x-ee4c2c)
-![Transformers](https://img.shields.io/badge/Transformers-HuggingFace-yellow)
-![License](https://img.shields.io/badge/License-Custom-lightgrey)
+# Near-Future Driving Risk Captioning
 
 > Hệ thống AI đa phương thức cho bài toán dự đoán rủi ro giao thông cận tương lai và sinh cảnh báo bằng ngôn ngữ tự nhiên.
 
-## 📌 Abstract
+## Abstract
 Dự án xây dựng một mô hình Multi-Task Learning để giải đồng thời hai bài toán:
 1. Dự đoán hành động tương lai của xe trong 5 bước (Speed, Course).
 2. Sinh caption mô tả/cảnh báo tình huống giao thông.
 
 Điểm quan trọng của đề tài là kết hợp thông tin hình ảnh từ camera hành trình với dữ liệu cảm biến chuyển động, từ đó vừa dự báo được xu hướng động lực học, vừa diễn giải bằng câu văn bản có ý nghĩa thực tế cho ADAS.
 
-## 🧠 Architecture
+## Architecture
 Mô hình gồm 3 khối chính:
 
 ### 1) Multimodal Encoder (Early Fusion)
@@ -29,19 +24,21 @@ Mô hình gồm 3 khối chính:
 
 ### 3) Near-Future Aware Caption Decoder
 1. Ghép Context Vector với dự đoán tương lai.
-2. Dùng LSTM decoder để sinh caption theo cơ chế auto-regressive.
+2. Decoder sinh caption theo cơ chế auto-regressive.
+	- Mặc định: Transformer decoder (masked self-attention + cross-attention vào context+future).
+	- Tuỳ chọn: LSTM decoder (phiên bản cũ).
 3. Caption mang tính “near-future aware”, không chỉ mô tả hiện tại mà còn phản ánh xu hướng sắp xảy ra.
 
-## 📊 Results (BDD-X Test Set)
+### Training improvements (so với bản paper-cơ-bản)
+- Chống mất cân bằng caption: token-weighted loss + weighted sampler.
+- Ổn định train: AdamW/weight decay, label smoothing, LR scheduler, gradient clipping, AMP.
+- Giảm overfit: dropout trong encoder/decoder/action head, early stopping mềm hơn (patience lớn + min_delta, có thể tắt).
+- Đồng bộ thời gian telemetry: tự suy luận telemetry rate (1Hz/5fps/30fps) để tránh lệch nhịp.
 
-| Metric | Giá trị |
-|---|---:|
-| MSE (Động lực học) | **0.0068** |
-| BLEU-4 | **0.1079** |
-| METEOR | **0.3800** |
-| CIDEr | **0.5063** |
+## Results
+Kết quả phụ thuộc cấu hình và dữ liệu (tokenizer/decoder/beam search). Khuyến nghị dùng beam search khi evaluate để tăng BLEU/CIDEr.
 
-## ⚙️ Installation
+## Installation
 
 ### Cấu trúc thư mục và vị trí đặt dữ liệu
 Người mới clone repo nên đảm bảo dữ liệu được đặt đúng chỗ như bên dưới để code chạy ngay:
@@ -65,15 +62,17 @@ Traffic_Risk_Project/
 │       ├── <video_id>.json
 │       └── ...
 ├── saved_models/
-│   ├── best_model.pth
+│   ├── best_model.pth              # sinh ra sau khi train
 │   └── training_log.csv
 ├── src/
 │   ├── config.py
 │   ├── dataset.py
+│   ├── simple_tokenizer.py
 │   └── models/
 │       ├── encoder.py
 │       ├── action_head.py
 │       ├── decoder.py
+│       ├── transformer_decoder.py
 │       └── full_model.py
 ```
 
@@ -112,7 +111,7 @@ Hoặc cài theo file sẵn có:
 pip install -r requirements.txt
 ```
 
-## 🚀 Usage
+## Usage
 
 ### 1) Huấn luyện mô hình
 ```bash
@@ -120,15 +119,20 @@ python train.py
 ```
 Chạy toàn bộ vòng lặp train/val, lưu model tốt nhất vào `saved_models/best_model.pth`.
 
+Gợi ý cấu hình trong `src/config.py`:
+- `DECODER_TYPE = "transformer"` (khuyến nghị)
+- `TOKENIZER_TYPE = "simple"` (thường giúp caption metrics tốt hơn với dataset nhỏ)
+- Nếu bị dừng sớm: tăng `EARLY_STOPPING_PATIENCE` hoặc đặt `USE_EARLY_STOPPING = False`
+
 ### 2) Đánh giá trên toàn tập test
 ```bash
-python evaluate.py
+python evaluate.py --beam-size 3 --length-penalty 0.7
 ```
 Tính đầy đủ các chỉ số: MSE, BLEU-4, METEOR, CIDEr.
 
 ### 3) Dự đoán 1 mẫu đơn lẻ
 ```bash
-python predict.py --index 0
+python predict.py --index 0 --beam-size 3 --length-penalty 0.7
 ```
 In ra console:
 1. Dự đoán hành động tương lai (Speed, Course).
@@ -140,7 +144,7 @@ python plot_metrics.py
 ```
 Sinh biểu đồ học tập từ `training_log.csv` để phân tích quá trình hội tụ.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 Ý tưởng và định hướng học thuật của dự án được tham chiếu từ bài báo:
 
 **"Image Captioning in Near Future from Vehicle Camera Images and Motion Information"**
