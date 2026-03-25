@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-
 def build_cnn5_feature_extractor() -> nn.Sequential:
     """
     CNN 5 lớp cho ảnh [B, 3, 90, 160].
@@ -42,8 +41,8 @@ def build_cnn5_feature_extractor() -> nn.Sequential:
 
 class PretrainCNN(nn.Module):
     """
-    Mạng pre-train để dự đoán trạng thái xe từ ảnh đơn.
-
+    Mạng pre-train để dự đoán trạng thái xe từ ảnh đơn (ĐÃ CẢI TIẾN BOTTLENECK).
+    
     Input:
         images: [B, 3, 90, 160]
     Output:
@@ -53,7 +52,28 @@ class PretrainCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.features = build_cnn5_feature_extractor()
-        self.regressor = nn.Linear(64 * 12 * 20, 2)  # 15360 -> 2
+        
+        
+        self.regressor = nn.Sequential(
+            # Hạ cánh 15360 -> 1024
+            nn.Linear(64 * 12 * 20, 1024),
+            nn.BatchNorm1d(1024),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+
+            # Hạ cánh 1024 -> 256
+            nn.Linear(1024, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+
+            # Hạ cánh 256 -> 32
+            nn.Linear(256, 32),
+            nn.ReLU(inplace=True),
+
+            # Output Tốc độ & Góc lái
+            nn.Linear(32, 2)
+        )
 
     def extract_flat_features(self, images: torch.Tensor) -> torch.Tensor:
         """

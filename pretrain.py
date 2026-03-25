@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 import os
 import pandas as pd
+from tqdm import tqdm  # THÊM THƯ VIỆN NÀY ĐỂ HIỆN THANH TIẾN ĐỘ
 
 from src.config import Config
 from src.pretrain_dataset import SingleFrameDataset
@@ -22,7 +23,7 @@ def build_pretrain_loaders(batch_size=None, val_ratio=0.1):
     # Ưu tiên đường dẫn hiện có trong config, fallback nếu thư mục ảnh khác tên.
     images_root = Config.IMAGES_ROOT
     if not os.path.exists(images_root):
-        alt_root = os.path.join(os.path.dirname(Config.TRAIN_CSV), "images_resized")
+        alt_root = os.path.join(os.path.dirname(Config.TRAIN_CSV), "images")
         if os.path.exists(alt_root):
             images_root = alt_root
 
@@ -60,13 +61,9 @@ def build_pretrain_loaders(batch_size=None, val_ratio=0.1):
     return train_loader, val_loader
 
 
-def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save_path="cnn_pretrained.pth"):
+def run_pretrain(train_loader, val_loader, epochs= 20, lr=1e-4, device=None, save_path="cnn_pretrained.pth"):
     """
     Huấn luyện PretrainCNN với train/val và lưu best model.
-
-    Yêu cầu loader trả về:
-        images: [B, 3, 90, 160]
-        targets: [B, 2]  (Speed, Course)
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -81,7 +78,9 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
         model.train()
         train_loss = 0.0
 
-        for images, targets in train_loader:
+        # --- BỌC TQDM VÀO VÒNG LẶP TRAIN ---
+        train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")
+        for images, targets in train_pbar:
             images = images.to(device)
             targets = targets.to(device)
 
@@ -92,39 +91,48 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
             optimizer.step()
 
             train_loss += loss.item()
+            # Cập nhật thanh tiến độ theo thời gian thực
+            train_pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
 
         avg_train_loss = train_loss / max(1, len(train_loader))
 
-        # Validation
+        # --- BỌC TQDM VÀO VÒNG LẶP VAL ---
         model.eval()
         val_loss = 0.0
+        val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]  ")
         with torch.no_grad():
-            for images, targets in val_loader:
+            for images, targets in val_pbar:
                 images = images.to(device)
                 targets = targets.to(device)
 
                 preds = model(images)
                 loss = criterion(preds, targets)
                 val_loss += loss.item()
+                val_pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
 
         avg_val_loss = val_loss / max(1, len(val_loader))
 
-        print(f"Epoch [{epoch+1}/{epochs}] - Train MSE: {avg_train_loss:.6f} | Val MSE: {avg_val_loss:.6f}")
+        print(f"\n=> TỔNG KẾT EPOCH {epoch+1}: Train MSE = {avg_train_loss:.6f} | Val MSE = {avg_val_loss:.6f}")
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), save_path)
-            print(f"Saved best pretrain model -> {save_path} (val={best_val_loss:.6f})")
+            print(f"->Đã lưu Model mới ngon hơn tại -> {save_path}\n")
 
 
 if __name__ == "__main__":
     train_loader, val_loader = build_pretrain_loaders()
+    print(f"Pretrain - Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
+    
+    # Kéo thẳng đường dẫn từ Config sang để 2 file nằm cạnh nhau
+    save_dir = os.path.join(Config.BASE_DIR, "saved_models")
+    save_path = os.path.join(save_dir, "cnn_pretrained.pth")
+    
     run_pretrain(
         train_loader=train_loader,
         val_loader=val_loader,
         epochs=Config.NUM_EPOCHS,
         lr=Config.LEARNING_RATE,
         device=Config.DEVICE,
-        save_path = os.path.join(os.path.dirname(__file__), "saved_models", "cnn_pretrained.pth")
+        save_path=save_path
     )
-    
