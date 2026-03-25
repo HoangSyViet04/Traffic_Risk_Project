@@ -212,7 +212,9 @@ def evaluate(args):
     model.eval()
 
     mse_criterion = nn.MSELoss(reduction="mean")
+    mae_criterion = nn.L1Loss(reduction="mean")
     mse_scores = []
+    mae_scores = []
     references = []
     hypotheses = []
 
@@ -228,6 +230,9 @@ def evaluate(args):
         mse_value = mse_criterion(pred_motion.unsqueeze(0), future_targets).item()
         mse_scores.append(mse_value)
 
+        mae_value = mae_criterion(pred_motion.unsqueeze(0), future_targets).item()
+        mae_scores.append(mae_value)
+
         references.append(tokenizer.decode(batch["caption"][0], skip_special_tokens=True).strip())
         hypotheses.append(pred_caption)
 
@@ -237,6 +242,7 @@ def evaluate(args):
 
     print("\n===== Evaluation Results =====")
     print(f"MSE     : {float(np.mean(mse_scores)):.6f}")
+    print(f"MAE     : {float(np.mean(mae_scores)):.6f}")
     print(f"BLEU-4  : {float(np.mean(bleu4_scores)):.6f}")
     print(f"METEOR  : {float(np.mean(meteor_scores)):.6f}")
     print(f"CIDEr   : {cider:.6f}")

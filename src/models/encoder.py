@@ -8,9 +8,9 @@ class MultimodalEncoder(nn.Module):
     """
     Multimodal Encoder theo hướng paper:
     - CNN 5 lớp (giống PretrainCNN) cho ảnh [B, 3, 90, 160]
-    - Feature map [B, 64, 12, 20] -> flatten [B, 15360]
-    - Early Fusion với sensor (3-d): 60@20x12 = 15360 + 3 = 15363
-    - LSTM 2 tầng: input_size=15363, hidden_size=1024
+    - Feature map [B, 512, 3, 5] -> flatten [B, 7680]
+    - Early Fusion với sensor (3-d): 7680 + 3 = 7683
+    - LSTM 2 tầng: input_size=7683, hidden_size=1024
     """
 
     def __init__(self, hidden_size=1024, sensor_dim=3, freeze_cnn=True):
@@ -22,11 +22,11 @@ class MultimodalEncoder(nn.Module):
         self.freeze_cnn = freeze_cnn
 
         # --- EARLY FUSION LSTM ---
-        # Input size = flattened image feature (15360) + sensor (3) = 15363
-        self.image_feature_dim = 64 * 12 * 20
+        # Input size = flattened image feature (7680) + sensor (3) = 7683
+        self.image_feature_dim = 512 * 3 * 5
         fusion_input_dim = self.image_feature_dim + sensor_dim
         self.lstm = nn.LSTM(
-            input_size=fusion_input_dim,  # 15363
+            input_size=fusion_input_dim,  # 7683
             hidden_size=hidden_size,      # 1024
             num_layers=2,                 # 2 tầng LSTM
             batch_first=True
@@ -53,8 +53,26 @@ class MultimodalEncoder(nn.Module):
                 # Hỗ trợ key dạng cnn.* nếu có
                 cnn_state[k[len("cnn."):]] = v
 
-        missing, unexpected = self.cnn.load_state_dict(cnn_state, strict=False)
+        current = self.cnn.state_dict()
+        filtered_state = {}
+        skipped_shape = []
+        skipped_missing = []
+
+        for k, v in cnn_state.items():
+            if k not in current:
+                skipped_missing.append(k)
+                continue
+            if tuple(current[k].shape) != tuple(v.shape):
+                skipped_shape.append((k, tuple(v.shape), tuple(current[k].shape)))
+                continue
+            filtered_state[k] = v
+
+        missing, unexpected = self.cnn.load_state_dict(filtered_state, strict=False)
         print(f"Loaded pretrained CNN from: {path}")
+        if skipped_shape:
+            print(f"Skipped {len(skipped_shape)} keys due to shape mismatch (likely different architecture).")
+        if skipped_missing:
+            print(f"Skipped {len(skipped_missing)} keys not present in current CNN.")
         if missing:
             print("Missing keys:", missing)
         if unexpected:
@@ -76,16 +94,16 @@ class MultimodalEncoder(nn.Module):
 
         if self.freeze_cnn:
             with torch.no_grad():
-                features = self.cnn(c_in)  # shape: [B*16, 64, 12, 20]
+                features = self.cnn(c_in)  # shape: [B*16, 512, 3, 5]
         else:
-            features = self.cnn(c_in)      # shape: [B*16, 64, 12, 20]
+            features = self.cnn(c_in)      # shape: [B*16, 512, 3, 5]
 
-        features = features.view(features.size(0), -1)           # shape: [B*16, 15360]
-        features = features.view(batch_size, frames, -1)         # shape: [B, 16, 15360]
+        features = features.view(features.size(0), -1)           # shape: [B*16, 7680]
+        features = features.view(batch_size, frames, -1)         # shape: [B, 16, 7680]
 
         # --- B. EARLY FUSION: NỐI IMAGE + SENSOR ---
         # sensors: [B, 16, 3]
-        fused = torch.cat((features, sensors), dim=2)            # shape: [B, 16, 15363]
+        fused = torch.cat((features, sensors), dim=2)            # shape: [B, 16, 7683]
 
         # --- C. LSTM 2 TẦNG ---
         # lstm_out: [B, 16, 1024] (output tại mọi timestep)

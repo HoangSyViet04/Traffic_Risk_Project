@@ -73,6 +73,7 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
 
     model = PretrainCNN().to(device)
     criterion = nn.MSELoss()
+    mae_criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     best_val_loss = float("inf")
@@ -80,6 +81,7 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
+        train_mae = 0.0
 
         for images, targets in train_loader:
             images = images.to(device)
@@ -88,16 +90,20 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
             optimizer.zero_grad()
             preds = model(images)                  # [B, 2]
             loss = criterion(preds, targets)
+            mae = mae_criterion(preds, targets)
             loss.backward()
             optimizer.step()
 
             train_loss += loss.item()
+            train_mae += mae.item()
 
         avg_train_loss = train_loss / max(1, len(train_loader))
+        avg_train_mae = train_mae / max(1, len(train_loader))
 
         # Validation
         model.eval()
         val_loss = 0.0
+        val_mae = 0.0
         with torch.no_grad():
             for images, targets in val_loader:
                 images = images.to(device)
@@ -105,11 +111,18 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
 
                 preds = model(images)
                 loss = criterion(preds, targets)
+                mae = mae_criterion(preds, targets)
                 val_loss += loss.item()
+                val_mae += mae.item()
 
         avg_val_loss = val_loss / max(1, len(val_loader))
+        avg_val_mae = val_mae / max(1, len(val_loader))
 
-        print(f"Epoch [{epoch+1}/{epochs}] - Train MSE: {avg_train_loss:.6f} | Val MSE: {avg_val_loss:.6f}")
+        print(
+            f"Epoch [{epoch+1}/{epochs}] - "
+            f"Train MSE: {avg_train_loss:.6f} | Train MAE: {avg_train_mae:.6f} | "
+            f"Val MSE: {avg_val_loss:.6f} | Val MAE: {avg_val_mae:.6f}"
+        )
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
