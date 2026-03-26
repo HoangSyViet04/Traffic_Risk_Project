@@ -53,6 +53,8 @@ def train():
     print(f"Da luu tap Test ra file rieng: {test_csv_path}")
 
     # Khoi tao Dataset
+    sample_fps = getattr(Config, "SAMPLE_FPS", 1)
+    source_fps = getattr(Config, "SOURCE_FPS", 5)
     train_dataset = DrivingRiskDataset(
         csv_file=Config.TRAIN_CSV,
         images_root=Config.IMAGES_ROOT,
@@ -61,8 +63,8 @@ def train():
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
-        sample_fps=Config.SAMPLE_FPS,
-        source_fps=Config.SOURCE_FPS,
+        sample_fps=sample_fps,
+        source_fps=source_fps,
     )
     train_dataset.data = train_df 
     
@@ -74,8 +76,8 @@ def train():
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
-        sample_fps=Config.SAMPLE_FPS,
-        source_fps=Config.SOURCE_FPS,
+        sample_fps=sample_fps,
+        source_fps=source_fps,
     )
     val_dataset.data = val_df 
      

@@ -94,8 +94,8 @@ def run_single_prediction(args):
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
-        sample_fps=Config.SAMPLE_FPS,
-        source_fps=Config.SOURCE_FPS,
+            sample_fps=getattr(Config, "SAMPLE_FPS", 1),
+            source_fps=getattr(Config, "SOURCE_FPS", 5),
     )
 
     if len(dataset) == 0:
