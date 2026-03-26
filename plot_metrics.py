@@ -210,49 +210,125 @@ def parse_pretrain_text_log(log_txt: str) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot learning curves from training_log.csv")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Plot learning curves for both training (train.py) and pretrain (pretrain.py). "
+            "By default, runs in auto mode and will plot whatever logs it finds."
+        )
+    )
     parser.add_argument(
         "--mode",
         type=str,
-        default="full",
-        choices=["full", "pretrain"],
-        help="full=train.py log (Train/Val + Motion/Caption), pretrain=pretrain.py log (MSE/MAE)",
+        default="auto",
+        choices=["auto", "full", "pretrain"],
+        help=(
+            "auto=plot both when logs exist; "
+            "full=train.py log (Train/Val + Motion/Caption); "
+            "pretrain=pretrain.py log (MSE/MAE)"
+        ),
     )
+    # Backward-compatible alias for single-log workflows.
     parser.add_argument(
         "--log-csv",
         type=str,
         default=None,
-        help="Path to the log CSV. If omitted, uses a mode-specific default.",
+        help=(
+            "(legacy) Path to the log CSV for the selected --mode. "
+            "Prefer using --training-log-csv / --pretrain-log-csv in auto mode."
+        ),
+    )
+    parser.add_argument(
+        "--training-log-csv",
+        type=str,
+        default=None,
+        help="Path to train.py log CSV (default: saved_models/training_log.csv).",
+    )
+    parser.add_argument(
+        "--pretrain-log-csv",
+        type=str,
+        default=None,
+        help="Path to pretrain.py log CSV (default: saved_models/pretrain_log.csv).",
     )
     parser.add_argument(
         "--log-txt",
         type=str,
         default=None,
-        help="(pretrain mode) Path to a console log .txt to parse (no retrain needed).",
+        help="(pretrain/auto) Path to a console pretrain log .txt to parse (no retrain needed).",
     )
     parser.add_argument(
         "--save-csv",
         type=str,
         default=None,
-        help="(pretrain mode) Where to write parsed CSV when using --log-txt.",
+        help="(pretrain/auto) Where to write parsed CSV when using --log-txt.",
     )
-    parser.add_argument("--output", type=str, default=None)
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help=(
+            "Output image path for single-mode runs (--mode full/pretrain). "
+            "In auto mode, use --output-dir instead."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=".",
+        help="(auto mode) Directory to save plots (default: current directory).",
+    )
     args = parser.parse_args()
 
-    if args.mode == "pretrain":
-        # If user provides a text log from an older run, parse it into CSV first.
-        if args.log_txt:
-            df = parse_pretrain_text_log(args.log_txt)
-            save_csv = args.save_csv or (args.log_csv or os.path.join("saved_models", "pretrain_log.csv"))
-            os.makedirs(os.path.dirname(save_csv), exist_ok=True)
-            df.to_csv(save_csv, index=False)
-            log_csv = save_csv
-            print(f"Parsed pretrain text log -> {log_csv}")
+    def _maybe_plot_pretrain(pretrain_csv_path: str, output_path: str) -> bool:
+        if not pretrain_csv_path or not os.path.exists(pretrain_csv_path):
+            return False
+        plot_pretrain_curves(pretrain_csv_path, output_path)
+        return True
+
+    def _maybe_plot_full(training_csv_path: str, output_path: str) -> bool:
+        if not training_csv_path or not os.path.exists(training_csv_path):
+            return False
+        plot_learning_curves(training_csv_path, output_path)
+        return True
+
+    # Resolve inputs
+    training_log_csv = args.training_log_csv or (
+        args.log_csv if args.mode == "full" else os.path.join("saved_models", "training_log.csv")
+    )
+    pretrain_log_csv = args.pretrain_log_csv or (
+        args.log_csv if args.mode == "pretrain" else os.path.join("saved_models", "pretrain_log.csv")
+    )
+
+    # Optional: parse pretrain console log into CSV
+    if args.log_txt:
+        df = parse_pretrain_text_log(args.log_txt)
+        save_csv = args.save_csv or pretrain_log_csv
+        save_dir = os.path.dirname(save_csv)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+        df.to_csv(save_csv, index=False)
+        pretrain_log_csv = save_csv
+        print(f"Parsed pretrain text log -> {pretrain_log_csv}")
+
+    # Plot
+    if args.mode in ("full", "pretrain"):
+        if args.mode == "full":
+            output = args.output or "learning_curve.png"
+            plot_learning_curves(training_log_csv, output)
         else:
-            log_csv = args.log_csv or os.path.join("saved_models", "pretrain_log.csv")
-        output = args.output or "pretrain_curve.png"
-        plot_pretrain_curves(log_csv, output)
+            output = args.output or "pretrain_curve.png"
+            plot_pretrain_curves(pretrain_log_csv, output)
     else:
-        log_csv = args.log_csv or os.path.join("saved_models", "training_log.csv")
-        output = args.output or "learning_curve.png"
-        plot_learning_curves(log_csv, output)
+        os.makedirs(args.output_dir, exist_ok=True)
+        out_full = os.path.join(args.output_dir, "learning_curve.png")
+        out_pretrain = os.path.join(args.output_dir, "pretrain_curve.png")
+
+        did_any = False
+        did_any = _maybe_plot_full(training_log_csv, out_full) or did_any
+        did_any = _maybe_plot_pretrain(pretrain_log_csv, out_pretrain) or did_any
+
+        if not did_any:
+            raise FileNotFoundError(
+                "No log files found to plot. "
+                "Expected one of: saved_models/training_log.csv or saved_models/pretrain_log.csv. "
+                "If you already have a pretrain console log, pass --log-txt <path>."
+            )
