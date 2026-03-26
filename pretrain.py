@@ -61,44 +61,57 @@ def build_pretrain_loaders(batch_size=None, val_ratio=0.1):
     return train_loader, val_loader
 
 
-def run_pretrain(train_loader, val_loader, epochs= 20, lr=1e-4, device=None, save_path="cnn_pretrained.pth"):
+def run_pretrain(train_loader, val_loader, epochs=20, lr=1e-4, device=None, save_path="cnn_pretrained.pth"):
     """
-    Huấn luyện PretrainCNN với train/val và lưu best model.
+    Huấn luyện PretrainCNN: Loss là MSE, log thêm MAE.
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = PretrainCNN().to(device)
-    criterion = nn.MSELoss()
+    
+    # Khai báo 2 cây thước đo
+    criterion_mse = nn.MSELoss() # Dùng để huấn luyện
+    criterion_mae = nn.L1Loss()  # Dùng để đo lường MAE
+    
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    best_val_loss = float("inf")
+    best_val_mse = float("inf")
 
     for epoch in range(epochs):
+        # ================= TRAIN =================
         model.train()
-        train_loss = 0.0
+        train_mse_sum, train_mae_sum = 0.0, 0.0
 
-        # --- BỌC TQDM VÀO VÒNG LẶP TRAIN ---
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")
         for images, targets in train_pbar:
             images = images.to(device)
             targets = targets.to(device)
 
             optimizer.zero_grad()
-            preds = model(images)                  # [B, 2]
-            loss = criterion(preds, targets)
-            loss.backward()
+            preds = model(images)                  
+            
+            # Tính 2 loại loss
+            loss_mse = criterion_mse(preds, targets)
+            loss_mae = criterion_mae(preds, targets)
+            
+            # Backprop bằng MSE
+            loss_mse.backward()
             optimizer.step()
 
-            train_loss += loss.item()
-            # Cập nhật thanh tiến độ theo thời gian thực
-            train_pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
+            train_mse_sum += loss_mse.item()
+            train_mae_sum += loss_mae.item()
+            
+            # Hiện cả MSE và MAE lên thanh chạy
+            train_pbar.set_postfix({"MSE": f"{loss_mse.item():.4f}", "MAE": f"{loss_mae.item():.4f}"})
 
-        avg_train_loss = train_loss / max(1, len(train_loader))
+        avg_train_mse = train_mse_sum / max(1, len(train_loader))
+        avg_train_mae = train_mae_sum / max(1, len(train_loader))
 
-        # --- BỌC TQDM VÀO VÒNG LẶP VAL ---
+        # ================= VALIDATION =================
         model.eval()
-        val_loss = 0.0
+        val_mse_sum, val_mae_sum = 0.0, 0.0
+        
         val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]  ")
         with torch.no_grad():
             for images, targets in val_pbar:
@@ -106,18 +119,28 @@ def run_pretrain(train_loader, val_loader, epochs= 20, lr=1e-4, device=None, sav
                 targets = targets.to(device)
 
                 preds = model(images)
-                loss = criterion(preds, targets)
-                val_loss += loss.item()
-                val_pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
+                
+                loss_mse = criterion_mse(preds, targets)
+                loss_mae = criterion_mae(preds, targets)
+                
+                val_mse_sum += loss_mse.item()
+                val_mae_sum += loss_mae.item()
+                
+                val_pbar.set_postfix({"MSE": f"{loss_mse.item():.4f}", "MAE": f"{loss_mae.item():.4f}"})
 
-        avg_val_loss = val_loss / max(1, len(val_loader))
+        avg_val_mse = val_mse_sum / max(1, len(val_loader))
+        avg_val_mae = val_mae_sum / max(1, len(val_loader))
 
-        print(f"\n=> TỔNG KẾT EPOCH {epoch+1}: Train MSE = {avg_train_loss:.6f} | Val MSE = {avg_val_loss:.6f}")
+        # Tổng kết in ra màn hình
+        print(f"\n=> TỔNG KẾT EPOCH {epoch+1}:")
+        print(f"   [Train] MSE: {avg_train_mse:.5f} | MAE: {avg_train_mae:.5f}")
+        print(f"   [Val]   MSE: {avg_val_mse:.5f} | MAE: {avg_val_mae:.5f}")
 
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        # Lưu model dựa trên độ tụt của Validation MSE
+        if avg_val_mse < best_val_mse:
+            best_val_mse = avg_val_mse
             torch.save(model.state_dict(), save_path)
-            print(f"->Đã lưu Model mới ngon hơn tại -> {save_path}\n")
+            print(f"-> Đã lưu Model tốt nhất tại -> {save_path} (Val MSE={best_val_mse:.5f})\n")
 
 
 if __name__ == "__main__":

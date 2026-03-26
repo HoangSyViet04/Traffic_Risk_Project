@@ -1,1 +1,1 @@
-Epoch,Train_Loss,Val_Loss,Motion_Loss_Val,Caption_Loss_Val
+Epoch,Train_Loss,Val_Loss,Motion_MSE_Val,Motion_MAE_Val,Caption_Loss_Val

@@ -23,7 +23,7 @@ class MultimodalEncoder(nn.Module):
 
         # --- EARLY FUSION LSTM ---
         # Input size = flattened image feature (15360) + sensor (3) = 15363
-        self.image_feature_dim = 64 * 12 * 20
+        self.image_feature_dim = 64 
         fusion_input_dim = self.image_feature_dim + sensor_dim
         self.lstm = nn.LSTM(
             input_size=fusion_input_dim,  # 15363
