@@ -10,7 +10,13 @@ class DrivingRiskModel(nn.Module):
 
         self.encoder = MultimodalEncoder(
             hidden_size=config.HIDDEN_SIZE,
-            sensor_dim=config.SENSOR_DIM
+            sensor_dim=config.SENSOR_DIM,
+            encoder_type=getattr(config, "ENCODER_TYPE", "transformer"),
+            transformer_nhead=getattr(config, "TRANSFORMER_NHEAD", 8),
+            transformer_num_layers=getattr(config, "TRANSFORMER_NUM_LAYERS", 2),
+            transformer_ff_dim=getattr(config, "TRANSFORMER_FF_DIM", 2048),
+            transformer_dropout=getattr(config, "TRANSFORMER_DROPOUT", 0.1),
+            transformer_use_cls_token=getattr(config, "TRANSFORMER_USE_CLS_TOKEN", True),
         )
 
         self.action_head = ActionRegressor(

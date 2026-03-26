@@ -14,22 +14,21 @@ def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_l
     model.eval()
 
     with torch.no_grad():
-        # 1. Trích xuất context chung (Image + Sensor)
-        context = model.encoder(images, sensors)
-        
+        # 1. Encoder: lấy chuỗi đặc trưng + context tổng kết
+        encoder_outputs, context = model.encoder(images, sensors)
+
         # 2. Dự đoán tương lai
         future_flat = model.action_head(context)
         future_pred = model.action_head.reshape_prediction(future_flat)
-        
-        # 3. Nối thành context vector 1034-d cho Decoder
-        decoder_context = torch.cat((context, future_flat), dim=1)
 
-        # 4. GỌI HÀM BEAM SEARCH TỪ DECODER VỪA TẠO
+        # 3. GỌI HÀM BEAM SEARCH (đút đủ encoder_outputs + context + future)
         start_token = tokenizer.cls_token_id
         end_token = tokenizer.sep_token_id
         
         best_token_ids = model.decoder.generate_beam_search(
-            context=decoder_context,
+            encoder_outputs=encoder_outputs,
+            context=context,
+            future_flat=future_flat,
             start_token_id=start_token,
             end_token_id=end_token,
             max_len=max_len,

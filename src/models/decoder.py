@@ -47,6 +47,15 @@ class CaptionDecoder(nn.Module):
         )
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
 
+        # 4. Tiền xử lý: Cross-attention lấy context vector theo từng timestep
+        self.pre_cross_attn = nn.MultiheadAttention(
+            embed_dim=embed_size,
+            num_heads=nhead,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.fuse_linear = nn.Linear(embed_size * 3, embed_size)
+
         self.linear = nn.Linear(embed_size, vocab_size)
 
     def generate_square_subsequent_mask(self, sz, device):
@@ -62,18 +71,32 @@ class CaptionDecoder(nn.Module):
         # --- CHUẨN BỊ BỘ NHỚ (MEMORY) ---
         memory = self.memory_projection(encoder_outputs)  # [B, Frames, 256]
 
-        # Concat (nối) context [B, 1024] và future_flat [B, 10] lại với nhau
-        decoder_context = torch.cat((context, future_flat), dim=1) ## -> Tạo thành cục [B, 1034]
-        
-        # Sau đó mới đem cục 1034 chiều này đi ép xuống 256 chiều làm "Mồi Hình Ảnh"
-        ctx_proj = self.context_projection(decoder_context).unsqueeze(1) # [B, 1, 256]
+        # Concat (nối) context [B, H] và future_flat [B, 2*F] lại với nhau
+        decoder_context = torch.cat((context, future_flat), dim=1)  # [B, context_dim]
 
-        # Cắt bỏ chữ cuối cùng, lùi chuỗi lại 1 nhịp 
-        embeddings = self.embed(captions[:, :-1]) * math.sqrt(self.embed_size) # [B, SeqLen-1, 256]
-        
-        # Nối "Mồi Hình Ảnh" vào đầu chuỗi: [Hình Ảnh, Từ 1, Từ 2, ...] 
-        tgt_emb = torch.cat([ctx_proj, embeddings], dim=1) # [B, SeqLen, 256]
-        # ------------------------------------------------
+        # Ép xuống 256-d để dùng làm tín hiệu điều kiện (conditioning)
+        cond = self.context_projection(decoder_context)  # [B, 256]
+        ctx_token = cond.unsqueeze(1)  # [B, 1, 256]
+
+        # Cắt bỏ chữ cuối cùng, lùi chuỗi lại 1 nhịp
+        word_emb = self.embed(captions[:, :-1]) * math.sqrt(self.embed_size)  # [B, SeqLen-1, 256]
+
+        # Chuỗi đầu vào decoder: [CTX, BOS, w1, w2, ...]
+        tgt_tokens = torch.cat([ctx_token, word_emb], dim=1)  # [B, SeqLen, 256]
+
+        # Conditioning lặp lại theo thời gian (đưa ở MỌI timestep)
+        cond_tokens = cond.unsqueeze(1).expand(-1, tgt_tokens.size(1), -1)  # [B, SeqLen, 256]
+
+        # Attention context vector theo timestep (query=tgt, key/value=memory)
+        attn_ctx, _ = self.pre_cross_attn(
+            query=tgt_tokens,
+            key=memory,
+            value=memory,
+            need_weights=False,
+        )  # [B, SeqLen, 256]
+
+        # Hợp nhất (word + conditioning + attention-ctx) về lại 256-d
+        tgt_emb = self.fuse_linear(torch.cat([tgt_tokens, cond_tokens, attn_ctx], dim=-1))  # [B, SeqLen, 256]
 
         tgt_emb = self.pos_encoder(tgt_emb)
         tgt_mask = self.generate_square_subsequent_mask(seq_len, device)
@@ -87,9 +110,10 @@ class CaptionDecoder(nn.Module):
         device = context.device
         
         memory = self.memory_projection(encoder_outputs) # [1, Frames, 256]
-        
+
         decoder_context = torch.cat((context, future_flat), dim=1)
-        ctx_proj = self.context_projection(decoder_context).unsqueeze(1) # [1, 1, 256]
+        cond = self.context_projection(decoder_context)  # [1, 256]
+        ctx_token = cond.unsqueeze(1)  # [1, 1, 256]
         
         beams = [(0.0, [start_token_id])]
         
@@ -105,11 +129,18 @@ class CaptionDecoder(nn.Module):
                 tgt_tensor = torch.tensor([tokens], dtype=torch.long, device=device) # [1, L]
                 tgt_emb_words = self.embed(tgt_tensor) * math.sqrt(self.embed_size)
                 
-                # --- ĐOẠN VÁ LỖI BƯỚC 2 (TRÁNH MÙ LÚC TEST) ---
-                # Nối Mồi Hình Ảnh vào trước chuỗi từ [Hình Ảnh, BOS, Từ 1, ...]
-                tgt_emb = torch.cat([ctx_proj, tgt_emb_words], dim=1) # [1, 1+L, 256]
-                # ----------------------------------------------
+                # Chuỗi đầu vào decoder: [CTX, BOS, w1, ...]
+                tgt_tokens = torch.cat([ctx_token, tgt_emb_words], dim=1)  # [1, 1+L, 256]
 
+                cond_tokens = cond.unsqueeze(1).expand(-1, tgt_tokens.size(1), -1)  # [1, 1+L, 256]
+                attn_ctx, _ = self.pre_cross_attn(
+                    query=tgt_tokens,
+                    key=memory,
+                    value=memory,
+                    need_weights=False,
+                )  # [1, 1+L, 256]
+
+                tgt_emb = self.fuse_linear(torch.cat([tgt_tokens, cond_tokens, attn_ctx], dim=-1))
                 tgt_emb = self.pos_encoder(tgt_emb)
                 tgt_mask = self.generate_square_subsequent_mask(tgt_emb.size(1), device)
                 

@@ -143,7 +143,7 @@ def train():
             loss_cap = criterion_caption(output_flat, target_flat)
             
             # 3. Tổng hợp Loss (Vẫn dùng MSE cho backprop)
-            loss = loss_cap + (1.0 * loss_motion_mse)
+            loss = (Config.LOSS_CAPTION_WEIGHT * loss_cap) + (Config.LOSS_MOTION_WEIGHT * loss_motion_mse)
 
             # Học ngược
             optimizer.zero_grad()
@@ -182,7 +182,7 @@ def train():
                 target_flat = captions.contiguous().view(-1)  
                 loss_cap = criterion_caption(output_flat, target_flat)
                 
-                loss = loss_cap + (1.0 * loss_motion_mse)
+                loss = (Config.LOSS_CAPTION_WEIGHT * loss_cap) + (Config.LOSS_MOTION_WEIGHT * loss_motion_mse)
                 
                 total_val_loss += loss.item()
                 total_val_motion_mse += loss_motion_mse.item()
