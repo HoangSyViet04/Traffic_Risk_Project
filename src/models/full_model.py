@@ -17,7 +17,8 @@ class DrivingRiskModel(nn.Module):
         # 1. Encoder: Image + Sensor -> context_vector [B, 1024]
         self.encoder = MultimodalEncoder(
             hidden_size=config.HIDDEN_SIZE,
-            sensor_dim=config.SENSOR_DIM
+            sensor_dim=config.SENSOR_DIM,
+            freeze_cnn=getattr(config, "FREEZE_CNN", True),
         )
 
         # 2. Action Head: context_vector [B, 1024] -> future_flat [B, 10]

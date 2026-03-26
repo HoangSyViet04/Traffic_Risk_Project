@@ -60,7 +60,9 @@ def train():
         tokenizer=tokenizer,
         transform=transform,
         max_frames=Config.MAX_FRAMES,
-        future_steps=Config.FUTURE_STEPS
+        future_steps=Config.FUTURE_STEPS,
+        sample_fps=Config.SAMPLE_FPS,
+        source_fps=Config.SOURCE_FPS,
     )
     train_dataset.data = train_df 
     
@@ -71,7 +73,9 @@ def train():
         tokenizer=tokenizer,
         transform=transform,
         max_frames=Config.MAX_FRAMES,
-        future_steps=Config.FUTURE_STEPS
+        future_steps=Config.FUTURE_STEPS,
+        sample_fps=Config.SAMPLE_FPS,
+        source_fps=Config.SOURCE_FPS,
     )
     val_dataset.data = val_df 
      
@@ -92,9 +96,23 @@ def train():
         print(f"CẢNH BÁO: Không tìm thấy {pretrain_path}! Mô hình sẽ train CNN từ đầu.")
     
     # --- 4. CẤU HÌNH HUẤN LUYỆN ---
-    criterion_caption = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    criterion_caption = nn.CrossEntropyLoss(
+        ignore_index=tokenizer.pad_token_id,
+        label_smoothing=getattr(Config, "LABEL_SMOOTHING", 0.0),
+    )
     criterion_motion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
+
+    scheduler = None
+    if getattr(Config, "USE_LR_SCHEDULER", False):
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=getattr(Config, "LR_SCHED_FACTOR", 0.5),
+            patience=getattr(Config, "LR_SCHED_PATIENCE", 2),
+            min_lr=getattr(Config, "MIN_LR", 1e-6),
+            verbose=True,
+        )
 
     best_val_loss = float('inf')
 
@@ -127,13 +145,20 @@ def train():
             # vocab_outputs: [B, 30, vocab_size]
             # captions: [B, 30] <- Target KHÔNG cắt [:, 1:] vì decoder đã concat context vào đầu
             vocab_size = len(tokenizer)
-            output_flat = vocab_outputs.view(-1, vocab_size)    # [B*30, vocab_size]
-            target_flat = captions.contiguous().view(-1)        # [B*30]
+            # NOTE:
+            # Decoder forward prepends a context step, then feeds captions[:, :-1] (starting with <BOS>).
+            # Therefore, vocab_outputs[:, 0] corresponds to the context-only step.
+            # To align training with generation (which starts from <BOS>), we compute CE on steps [1:]
+            # against targets captions[:, 1:] (i.e., predict the next token after <BOS>).
+            output_flat = vocab_outputs[:, 1:, :].contiguous().view(-1, vocab_size)  # [B*29, vocab_size]
+            target_flat = captions[:, 1:].contiguous().view(-1)                      # [B*29]
             
             loss_cap = criterion_caption(output_flat, target_flat)
             
             # 3. Tong hop Loss
-            loss = loss_cap + (1.0 * loss_motion)
+            cap_w = getattr(Config, "CAPTION_LOSS_WEIGHT", 1.0)
+            motion_w = getattr(Config, "MOTION_LOSS_WEIGHT", 1.0)
+            loss = (cap_w * loss_cap) + (motion_w * loss_motion)
 
             # Hoc nguoc
             optimizer.zero_grad()
@@ -164,11 +189,14 @@ def train():
 
                 loss_motion = criterion_motion(future_preds, future_targets)
                 
-                output_flat = vocab_outputs.view(-1, len(tokenizer))
-                target_flat = captions.contiguous().view(-1)  # Không cắt [:, 1:]
+                vocab_size = len(tokenizer)
+                output_flat = vocab_outputs[:, 1:, :].contiguous().view(-1, vocab_size)
+                target_flat = captions[:, 1:].contiguous().view(-1)
                 loss_cap = criterion_caption(output_flat, target_flat)
                 
-                loss = loss_cap + (1.0 * loss_motion)
+                cap_w = getattr(Config, "CAPTION_LOSS_WEIGHT", 1.0)
+                motion_w = getattr(Config, "MOTION_LOSS_WEIGHT", 1.0)
+                loss = (cap_w * loss_cap) + (motion_w * loss_motion)
                 
                 total_val_loss += loss.item()
                 total_val_motion_loss += loss_motion.item()
@@ -177,6 +205,9 @@ def train():
         avg_val_loss = total_val_loss / len(val_loader)
         avg_val_motion_loss = total_val_motion_loss / len(val_loader)
         avg_val_cap_loss = total_val_cap_loss / len(val_loader)
+
+        if scheduler is not None:
+            scheduler.step(avg_val_loss)
         
         print(f"Ket qua Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
         

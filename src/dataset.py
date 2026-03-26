@@ -7,7 +7,18 @@ from PIL import Image
 import numpy as np
 
 class DrivingRiskDataset(Dataset):
-    def __init__(self, csv_file, images_root, telemetry_root, tokenizer, transform=None, max_frames=16, future_steps=5):
+    def __init__(
+        self,
+        csv_file,
+        images_root,
+        telemetry_root,
+        tokenizer,
+        transform=None,
+        max_frames=16,
+        future_steps=5,
+        sample_fps: int = 1,
+        source_fps: int = 5,
+    ):
         """
         Args:
             csv_file: Đường dẫn đến processed_train.csv
@@ -24,6 +35,8 @@ class DrivingRiskDataset(Dataset):
         self.transform = transform
         self.max_frames = max_frames
         self.future_steps = future_steps
+        self.sample_fps = sample_fps
+        self.source_fps = source_fps
 
     def __len__(self):
         return len(self.data)
@@ -43,13 +56,28 @@ class DrivingRiskDataset(Dataset):
         mid = start + (end - start) * 0.5
         
         # --- 2. INPUT FRAMES (Start -> Mid) ---
-        # Lấy 16 frame đều nhau
-        frame_indices = np.linspace(start, mid, num=self.max_frames)
+        # Paper-like sampling: n frames at 1 fps over [start, mid]
+        sample_fps = int(self.sample_fps)
+        source_fps = int(self.source_fps)
+
+        if mid <= start:
+            frame_times = np.array([start] * self.max_frames, dtype=float)
+        else:
+            step = 1.0 / float(sample_fps)
+            candidates = np.arange(start, mid + 1e-9, step, dtype=float)
+            if len(candidates) >= self.max_frames:
+                pick_idx = np.linspace(0, len(candidates) - 1, num=self.max_frames)
+                pick_idx = np.round(pick_idx).astype(int)
+                frame_times = candidates[pick_idx]
+            else:
+                frame_times = np.linspace(start, mid, num=self.max_frames, dtype=float)
+
+        frame_indices = frame_times
         video_tensors = []
         
         for t in frame_indices:
-            # fps=5 (frame_1 = 0s, frame_2 = 0.2s...)
-            f_idx = int(t * 5) + 1
+            # Stored frames are 5 fps exports: frame_1 = 0s, frame_2 = 0.2s...
+            f_idx = int(t * float(source_fps)) + 1
             img_path = os.path.join(self.img_root, video_id, f"frame_{f_idx}.jpg")
             
             # Fallback nếu không có ảnh (màn hình đen)
@@ -88,7 +116,8 @@ class DrivingRiskDataset(Dataset):
                 
                 # -- Lấy dữ liệu QUÁ KHỨ cho từng frame (Dùng 3 thông số) --
                 for t in frame_indices:
-                    idx = int(t)
+                    # Telemetry is typically aligned per-second; round to nearest second.
+                    idx = int(round(float(t)))
                     safe_idx = min(idx, max_log_idx)
                     
                     if len(full_log) > 0:
@@ -116,7 +145,7 @@ class DrivingRiskDataset(Dataset):
                 future_indices = np.linspace(mid, end, num=self.future_steps)
                 
                 for i, t_val in enumerate(future_indices):
-                    target_idx = int(t_val)
+                    target_idx = int(round(float(t_val)))
                     safe_idx = min(target_idx, max_log_idx)
                     
                     if len(full_log) > 0:

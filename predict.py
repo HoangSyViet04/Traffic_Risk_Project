@@ -10,7 +10,17 @@ from src.dataset import DrivingRiskDataset
 from src.models.full_model import DrivingRiskModel
 
 
-def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_len=30):
+def generate_caption_and_motion(
+    model,
+    tokenizer,
+    images,
+    sensors,
+    device,
+    max_len=30,
+    beam_size: int = None,
+    length_penalty_alpha: float = None,
+    min_decode_len: int = None,
+):
     model.eval()
 
     with torch.no_grad():
@@ -33,7 +43,13 @@ def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_l
             start_token_id=start_token,
             end_token_id=end_token,
             max_len=max_len,
-            beam_size=5  # Bạn có thể tăng lên 5 để quét kỹ hơn nếu muốn
+            beam_size=int(beam_size if beam_size is not None else getattr(Config, "BEAM_SIZE", 5)),
+            length_penalty_alpha=float(
+                length_penalty_alpha
+                if length_penalty_alpha is not None
+                else getattr(Config, "LENGTH_PENALTY_ALPHA", 0.7)
+            ),
+            min_len=int(min_decode_len if min_decode_len is not None else getattr(Config, "MIN_DECODE_LEN", 3)),
         )
 
     # 5. Dịch Token IDs thành văn bản, tự động bỏ qua các thẻ [CLS], [SEP], [PAD]
@@ -78,6 +94,8 @@ def run_single_prediction(args):
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
+        sample_fps=Config.SAMPLE_FPS,
+        source_fps=Config.SOURCE_FPS,
     )
 
     if len(dataset) == 0:
@@ -94,7 +112,17 @@ def run_single_prediction(args):
     images = sample["video"].unsqueeze(0).to(device)
     sensors = sample["sensor"].unsqueeze(0).to(device)
 
-    pred_caption, pred_motion = generate_caption_and_motion(model, tokenizer, images, sensors, device)
+    pred_caption, pred_motion = generate_caption_and_motion(
+        model,
+        tokenizer,
+        images,
+        sensors,
+        device,
+        max_len=args.max_len,
+        beam_size=args.beam_size,
+        length_penalty_alpha=args.length_penalty_alpha,
+        min_decode_len=args.min_decode_len,
+    )
     pred_motion_values = denormalize_future_motion(pred_motion.cpu())
 
     # Ground truth: future_motion đã được normalize trong dataset (speed/30, course/360)
@@ -124,6 +152,10 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default=Config.MODEL_SAVE_PATH)
     parser.add_argument("--test-csv", type=str, default=os.path.join(os.path.dirname(Config.TRAIN_CSV), "test_data.csv"))
     parser.add_argument("--index", type=int, default=0, help="Index of sample in test_data.csv")
+    parser.add_argument("--max-len", type=int, default=30)
+    parser.add_argument("--beam-size", type=int, default=None)
+    parser.add_argument("--length-penalty-alpha", type=float, default=None)
+    parser.add_argument("--min-decode-len", type=int, default=None)
     args = parser.parse_args()
 
     run_single_prediction(args)

@@ -78,6 +78,14 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
 
     best_val_loss = float("inf")
 
+    # If the caller provides a CSV path, we will append per-epoch metrics.
+    log_csv = os.path.join(os.path.dirname(save_path), "pretrain_log.csv")
+    os.makedirs(os.path.dirname(log_csv), exist_ok=True)
+    if not os.path.exists(log_csv):
+        pd.DataFrame(
+            columns=["Epoch", "Train_MSE", "Train_MAE", "Val_MSE", "Val_MAE"]
+        ).to_csv(log_csv, index=False)
+
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
@@ -124,6 +132,19 @@ def run_pretrain(train_loader, val_loader, epochs=10, lr=1e-4, device=None, save
             f"Val MSE: {avg_val_loss:.6f} | Val MAE: {avg_val_mae:.6f}"
         )
 
+        # Append metrics to CSV for plotting.
+        pd.DataFrame(
+            [
+                {
+                    "Epoch": epoch + 1,
+                    "Train_MSE": avg_train_loss,
+                    "Train_MAE": avg_train_mae,
+                    "Val_MSE": avg_val_loss,
+                    "Val_MAE": avg_val_mae,
+                }
+            ]
+        ).to_csv(log_csv, mode="a", header=False, index=False)
+
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), save_path)
@@ -138,6 +159,6 @@ if __name__ == "__main__":
         epochs=Config.NUM_EPOCHS,
         lr=Config.LEARNING_RATE,
         device=Config.DEVICE,
-        save_path = os.path.join(os.path.dirname(__file__), "saved_models", "cnn_pretrained.pth")
+        save_path=os.path.join(os.path.dirname(__file__), "saved_models", "cnn_pretrained.pth"),
     )
     

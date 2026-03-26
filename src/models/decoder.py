@@ -63,7 +63,16 @@ class CaptionDecoder(nn.Module):
         outputs = self.linear(hiddens)                           # shape: [B, SeqLen, vocab_size]
 
         return outputs
-    def generate_beam_search(self, context, start_token_id, end_token_id, max_len=30, beam_size=3):
+    def generate_beam_search(
+        self,
+        context,
+        start_token_id,
+        end_token_id,
+        max_len=30,
+        beam_size=3,
+        length_penalty_alpha: float = 0.7,
+        min_len: int = 3,
+    ):
         """
         Sinh caption bằng Beam Search cho 1 sample (Batch Size = 1).
         Args:
@@ -82,8 +91,15 @@ class CaptionDecoder(nn.Module):
         # Đưa context qua LSTM để lấy hidden state ban đầu
         _, (h, c) = self.lstm(context_proj)
         
+        def _length_penalty(seq_len: int) -> float:
+            # Google NMT length penalty: ((5+len)/6)^alpha
+            # With log-prob sums (negative), dividing by lp reduces the short-sequence bias.
+            if length_penalty_alpha <= 0:
+                return 1.0
+            return float(((5.0 + seq_len) / 6.0) ** length_penalty_alpha)
+
         # 2. Khởi tạo Beam
-        # Cấu trúc 1 beam: (Điểm số log_prob, [Danh sách token], h, c)
+        # Cấu trúc 1 beam: (raw_log_prob_sum, [token_ids], h, c)
         beams = [(0.0, [start_token_id], h, c)]
         
         # 3. Vòng lặp sinh từ
@@ -106,6 +122,10 @@ class CaptionDecoder(nn.Module):
                 # Tính xác suất cho các từ tiếp theo
                 logits = self.linear(out.squeeze(1))          # [1, vocab_size]
                 log_probs = F.log_softmax(logits, dim=1)      # [1, vocab_size]
+
+                # Avoid ending too early.
+                if step < max(0, min_len - 1):
+                    log_probs[0, end_token_id] = -1e9
                 
                 # Lấy top k từ có xác suất cao nhất (k = beam_size)
                 topk_log_probs, topk_indices = torch.topk(log_probs, beam_size, dim=1)
@@ -117,7 +137,12 @@ class CaptionDecoder(nn.Module):
                     new_beams.append((next_score, tokens + [next_token], h_next, c_next))
             
             # Sắp xếp lại tất cả các nhánh theo điểm số (từ cao xuống thấp)
-            new_beams = sorted(new_beams, key=lambda x: x[0], reverse=True)
+            # Sort by length-normalized score for better BLEU/CIDEr.
+            new_beams = sorted(
+                new_beams,
+                key=lambda x: x[0] / _length_penalty(len(x[1])),
+                reverse=True,
+            )
             
             # Cắt tỉa: Chỉ giữ lại top 'beam_size' nhánh tốt nhất
             beams = new_beams[:beam_size]
@@ -127,7 +152,7 @@ class CaptionDecoder(nn.Module):
                 break
                 
         # 4. Trả về chuỗi token của nhánh có điểm số cao nhất
-        best_beam = beams[0]
+        best_beam = max(beams, key=lambda x: x[0] / _length_penalty(len(x[1])))
         best_tokens = best_beam[1]
         
         return best_tokens

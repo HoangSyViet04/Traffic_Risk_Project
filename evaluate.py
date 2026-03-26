@@ -1,5 +1,7 @@
 import argparse
 import collections
+import datetime as _dt
+import json
 import math
 import os
 from typing import Dict, Iterable, List, Tuple
@@ -142,7 +144,17 @@ def official_cider_score_if_available(references: List[str], hypotheses: List[st
         return cider_score(references, hypotheses), "approx"
 
 
-def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_len=30):
+def generate_caption_and_motion(
+    model,
+    tokenizer,
+    images,
+    sensors,
+    device,
+    max_len=30,
+    beam_size: int = None,
+    length_penalty_alpha: float = None,
+    min_decode_len: int = None,
+):
     model.eval()
 
     with torch.no_grad():
@@ -165,7 +177,13 @@ def generate_caption_and_motion(model, tokenizer, images, sensors, device, max_l
             start_token_id=start_token,
             end_token_id=end_token,
             max_len=max_len,
-            beam_size=5  # Bạn có thể tăng lên 5 để quét kỹ hơn nếu muốn
+            beam_size=int(beam_size if beam_size is not None else getattr(Config, "BEAM_SIZE", 5)),
+            length_penalty_alpha=float(
+                length_penalty_alpha
+                if length_penalty_alpha is not None
+                else getattr(Config, "LENGTH_PENALTY_ALPHA", 0.7)
+            ),
+            min_len=int(min_decode_len if min_decode_len is not None else getattr(Config, "MIN_DECODE_LEN", 3)),
         )
 
     # 5. Dịch Token IDs thành văn bản, tự động bỏ qua các thẻ [CLS], [SEP], [PAD]
@@ -200,6 +218,8 @@ def evaluate(args):
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS,
+        sample_fps=Config.SAMPLE_FPS,
+        source_fps=Config.SOURCE_FPS,
     )
 
     if args.max_samples is not None:
@@ -225,7 +245,17 @@ def evaluate(args):
         sensors = batch["sensor"].to(device)
         future_targets = batch["future_motion"].to(device)
 
-        pred_caption, pred_motion = generate_caption_and_motion(model, tokenizer, images, sensors, device)
+        pred_caption, pred_motion = generate_caption_and_motion(
+            model,
+            tokenizer,
+            images,
+            sensors,
+            device,
+            max_len=args.max_len,
+            beam_size=args.beam_size,
+            length_penalty_alpha=args.length_penalty_alpha,
+            min_decode_len=args.min_decode_len,
+        )
 
         mse_value = mse_criterion(pred_motion.unsqueeze(0), future_targets).item()
         mse_scores.append(mse_value)
@@ -241,13 +271,50 @@ def evaluate(args):
     cider, cider_mode = official_cider_score_if_available(references, hypotheses)
 
     print("\n===== Evaluation Results =====")
-    print(f"MSE     : {float(np.mean(mse_scores)):.6f}")
-    print(f"MAE     : {float(np.mean(mae_scores)):.6f}")
-    print(f"BLEU-4  : {float(np.mean(bleu4_scores)):.6f}")
-    print(f"METEOR  : {float(np.mean(meteor_scores)):.6f}")
+    mse_mean = float(np.mean(mse_scores))
+    mae_mean = float(np.mean(mae_scores))
+    bleu4_mean = float(np.mean(bleu4_scores))
+    meteor_mean = float(np.mean(meteor_scores))
+
+    print(f"MSE     : {mse_mean:.6f}")
+    print(f"MAE     : {mae_mean:.6f}")
+    print(f"BLEU-4  : {bleu4_mean:.6f}")
+    print(f"METEOR  : {meteor_mean:.6f}")
     print(f"CIDEr   : {cider:.6f}")
     if cider_mode == "approx":
         print("Note    : pycocoevalcap not found, CIDEr is approximate.")
+
+    # Persist the latest evaluation results for reporting.
+    save_path = getattr(args, "save_path", None)
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        payload = {
+            "timestamp": _dt.datetime.now().isoformat(timespec="seconds"),
+            "model_path": args.model_path,
+            "test_csv": args.test_csv,
+            "max_samples": args.max_samples,
+            "decode": {
+                "max_len": args.max_len,
+                "beam_size": args.beam_size if args.beam_size is not None else getattr(Config, "BEAM_SIZE", 5),
+                "length_penalty_alpha": args.length_penalty_alpha
+                if args.length_penalty_alpha is not None
+                else getattr(Config, "LENGTH_PENALTY_ALPHA", 0.7),
+                "min_decode_len": args.min_decode_len
+                if args.min_decode_len is not None
+                else getattr(Config, "MIN_DECODE_LEN", 3),
+            },
+            "metrics": {
+                "mse": mse_mean,
+                "mae": mae_mean,
+                "bleu4": bleu4_mean,
+                "meteor": meteor_mean,
+                "cider": float(cider),
+                "cider_mode": cider_mode,
+            },
+        }
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"Saved evaluation summary to: {save_path}")
 
 
 if __name__ == "__main__":
@@ -255,4 +322,14 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default=Config.MODEL_SAVE_PATH)
     parser.add_argument("--test-csv", type=str, default=Config.TEST_CSV)
     parser.add_argument("--max-samples", type=int, default=None, help="Optional quick evaluation limit")
+    parser.add_argument("--max-len", type=int, default=30)
+    parser.add_argument("--beam-size", type=int, default=None)
+    parser.add_argument("--length-penalty-alpha", type=float, default=None)
+    parser.add_argument("--min-decode-len", type=int, default=None)
+    parser.add_argument(
+        "--save-path",
+        type=str,
+        default=os.path.join("evaluate", "eval_results_latest.json"),
+        help="Where to write the latest evaluation results JSON (set to empty to disable).",
+    )
     evaluate(parser.parse_args())
