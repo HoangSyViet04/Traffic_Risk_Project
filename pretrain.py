@@ -63,7 +63,7 @@ def build_pretrain_loaders(batch_size=None, val_ratio=0.1):
 
 def run_pretrain(train_loader, val_loader, epochs=20, lr=1e-4, device=None, save_path="cnn_pretrained.pth"):
     """
-    Huấn luyện PretrainCNN: Loss là MSE, log thêm MAE.
+    Huấn luyện PretrainCNN: Loss là MSE, log thêm MAE và lưu vào CSV.
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,6 +77,16 @@ def run_pretrain(train_loader, val_loader, epochs=20, lr=1e-4, device=None, save
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     best_val_mse = float("inf")
+
+    # --- KHỞI TẠO FILE LOG CSV ---
+    # Lưu file log cùng thư mục với file model
+    log_dir = os.path.dirname(save_path)
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "pretrain_log.csv")
+    
+    # Tạo header cho file CSV (Nghi đè nếu file đã tồn tại để tránh rác từ lần chạy trước)
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("Epoch,Train_MSE,Train_MAE,Val_MSE,Val_MAE\n")
 
     for epoch in range(epochs):
         # ================= TRAIN =================
@@ -136,6 +146,10 @@ def run_pretrain(train_loader, val_loader, epochs=20, lr=1e-4, device=None, save
         print(f"   [Train] MSE: {avg_train_mse:.5f} | MAE: {avg_train_mae:.5f}")
         print(f"   [Val]   MSE: {avg_val_mse:.5f} | MAE: {avg_val_mae:.5f}")
 
+        # --- GHI LOG VÀO FILE CSV ---
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"{epoch+1},{avg_train_mse:.5f},{avg_train_mae:.5f},{avg_val_mse:.5f},{avg_val_mae:.5f}\n")
+
         # Lưu model dựa trên độ tụt của Validation MSE
         if avg_val_mse < best_val_mse:
             best_val_mse = avg_val_mse
@@ -149,6 +163,7 @@ if __name__ == "__main__":
     
     # Kéo thẳng đường dẫn từ Config sang để 2 file nằm cạnh nhau
     save_dir = os.path.join(Config.BASE_DIR, "saved_models")
+    os.makedirs(save_dir, exist_ok=True) # Ensure directory exists before creating files in it
     save_path = os.path.join(save_dir, "cnn_pretrained.pth")
     
     run_pretrain(
