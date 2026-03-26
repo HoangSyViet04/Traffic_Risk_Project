@@ -38,7 +38,7 @@ class Config:
     BATCH_SIZE = 50
     # Paper uses 30 epochs
     NUM_EPOCHS = 30
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 1e-5
 
     # Multi-task loss weights
     CAPTION_LOSS_WEIGHT = 1.0
