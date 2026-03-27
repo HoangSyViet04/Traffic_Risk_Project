@@ -34,8 +34,8 @@ def build_cnn5_feature_extractor() -> nn.Sequential:
         nn.ReLU(inplace=True),
 
         # Block 5: [B, 64, 12, 20] -> [B, 64, 12, 20]
-        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
-        nn.BatchNorm2d(64),
+        nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1),
+        nn.BatchNorm2d(32),
         nn.ReLU(inplace=True),
     )
 
@@ -53,20 +53,35 @@ class PretrainCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.features = build_cnn5_feature_extractor()
-        self.regressor = nn.Linear(64 * 12 * 20, 2)  # 15360 -> 2
+        self.regressor = nn.Sequential(
+            nn.Flatten(),  # [B, 7650]
 
+            nn.Dropout(0.5),
+            nn.Linear(32*12*20, 4096),
+            nn.Dropout(0.3),
+            nn.ReLU(),
+            
+
+            nn.Linear(4096, 1024),
+            nn.ReLU(),
+
+            nn.Linear(1024, 128),
+            nn.ReLU(),
+            
+            nn.Linear(128, 2)
+        )
     def extract_flat_features(self, images: torch.Tensor) -> torch.Tensor:
         """
         Args:
             images: [B, 3, 90, 160]
         Returns:
-            flat: [B, 15360]
+            flat: [B, 7680]
         """
         feat = self.features(images)          # [B, 64, 12, 20]
-        flat = feat.flatten(start_dim=1)      # [B, 15360]
+        flat = feat.flatten(start_dim=1)      # [B, 7680]
         return flat
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
-        flat = self.extract_flat_features(images)  # [B, 15360]
+        flat = self.extract_flat_features(images)  # [B, 7680]
         pred = self.regressor(flat)                # [B, 2]
         return pred

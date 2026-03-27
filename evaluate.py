@@ -229,7 +229,7 @@ def evaluate(args):
 
         pred_caption, pred_motion = generate_caption_and_motion(model, tokenizer, images, sensors, device)
 
-        mse_value = mse_criterion(pred_motion.unsqueeze(0), future_targets).item()
+        mse_value = mse_criterion(pred_motion.unsqueeze(0), future_targets).item()  
         mse_scores.append(mse_value)
 
         references.append(tokenizer.decode(batch["caption"][0], skip_special_tokens=True).strip())

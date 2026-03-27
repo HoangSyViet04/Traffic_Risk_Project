@@ -5,7 +5,7 @@ import json
 import os
 from PIL import Image
 import numpy as np
-
+import re
 class DrivingRiskDataset(Dataset):
     def __init__(self, csv_file, images_root, telemetry_root, tokenizer, transform=None, max_frames=16, future_steps=5):
         """
@@ -13,7 +13,7 @@ class DrivingRiskDataset(Dataset):
             csv_file: Đường dẫn đến processed_train.csv
             images_root: Folder chứa ảnh (data/images)
             telemetry_root: Folder chứa json (data/telemetry)
-            tokenizer: Bộ mã hóa văn bản (BERT/GPT tokenizer...)
+            
             transform: Các phép biến đổi ảnh (Resize, Normalize...)
             max_frames: Số lượng ảnh tối đa model sẽ xem (Input Size)
         """
@@ -24,10 +24,26 @@ class DrivingRiskDataset(Dataset):
         self.transform = transform
         self.max_frames = max_frames
         self.future_steps = future_steps
-
+        with open(tokenizer, "r") as f:   # tokenizer giờ là path vocab.json
+            vocab = json.load(f)
+        
+        self.stoi = vocab["stoi"]
+        self.itos = {int(k): v for k, v in vocab["itos"].items()}
+        
+        self.pad_idx = self.stoi["<PAD>"]
+        self.sos_idx = self.stoi["<SOS>"]
+        self.eos_idx = self.stoi["<EOS>"]
+        self.unk_idx = self.stoi["<UNK>"]
+        
+        self.max_len = 30
+        
+    def simple_tokenize(self, text):
+        text = text.lower()
+        text = re.sub(r"[^a-z0-9\s]", "", text)
+        return text.split()
     def __len__(self):
-        return len(self.data)
-
+            return len(self.data)
+        
     def __getitem__(self, idx):
         row  = self.data.iloc[idx]
         video_id = row['video_id']
@@ -140,10 +156,27 @@ class DrivingRiskDataset(Dataset):
         sensor_input = torch.tensor(sensor_data, dtype=torch.float32)
 
         # --- 4. CAPTION (TARGET) ---
-        tokens = self.tokenizer(
-            caption, padding='max_length', truncation=True, max_length=30, return_tensors="pt"
-        )
-        caption_ids = tokens.input_ids.squeeze(0)
+        # --- TOKENIZE ---
+        tokens = self.simple_tokenize(caption)
+
+        # --- WORD → INDEX ---
+        tokens = [
+            self.stoi.get(token, self.unk_idx)
+            for token in tokens
+        ]
+
+        # --- ADD SPECIAL TOKENS ---
+        tokens = [self.sos_idx] + tokens + [self.eos_idx]
+
+        # --- PADDING ---
+        if len(tokens) >= self.max_len:
+            tokens = tokens[:self.max_len - 1]
+            tokens.append(self.eos_idx)
+        else:
+            tokens += [self.pad_idx] * (self.max_len - len(tokens))
+
+        # --- TO TENSOR ---
+        caption_ids = torch.tensor(tokens, dtype=torch.long)
 
         return {
             'video': video_input,           # [16, 3, 160, 90]
@@ -151,6 +184,3 @@ class DrivingRiskDataset(Dataset):
             'future_motion': future_motion, # [5, 2]  (Speed, Course) -> ĐÚNG CHUẨN
             'caption': caption_ids          # [30]
         }
-
-
-        
