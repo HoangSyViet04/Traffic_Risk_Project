@@ -3,12 +3,11 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from transformers import AutoTokenizer
 from tqdm import tqdm
 import os
 import pandas as pd
 from sklearn.model_selection import train_test_split
-
+import json
 # Import các module chúng ta đã viết
 from src.config import Config
 from src.dataset import DrivingRiskDataset
@@ -29,8 +28,12 @@ def train():
     # --- 2. CHUẨN BỊ VÀ CHIA DỮ LIỆU (TRAIN/VAL/TEST) ---
     print("Dang tai va chia du lieu (Train 80% / Val 10% / Test 10%)...")
     
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    
+    with open(Config.VOCAB_SIZE, "r") as f:
+        vocab = json.load(f)
+
+    stoi = vocab["stoi"]
+    pad_idx = stoi["<PAD>"]
+    vocab_size = len(stoi)
     transform = transforms.Compose([
         transforms.Resize(Config.IMAGE_SIZE),
         transforms.ToTensor(),
@@ -57,7 +60,7 @@ def train():
         csv_file=Config.TRAIN_CSV,
         images_root=Config.IMAGES_ROOT,
         telemetry_root=Config.TELEMETRY_ROOT,
-        tokenizer=tokenizer,
+        tokenizer=Config.VOCAB_SIZE,
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS
@@ -68,7 +71,7 @@ def train():
         csv_file=Config.TRAIN_CSV,
         images_root=Config.IMAGES_ROOT,
         telemetry_root=Config.TELEMETRY_ROOT,
-        tokenizer=tokenizer,
+        tokenizer=Config.VOCAB_SIZE,
         transform=transform,
         max_frames=Config.MAX_FRAMES,
         future_steps=Config.FUTURE_STEPS
@@ -79,7 +82,7 @@ def train():
     val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=0) 
     # --- 3. KHỞI TẠO MODEL ---
     print("Dang khoi tao Model...")
-    model = DrivingRiskModel(Config, vocab_size=len(tokenizer)).to(device)
+    model = DrivingRiskModel(Config, vocab_size=vocab_size).to(device)
     
     # [QUAN TRỌNG] Nạp trọng số Pre-train cho nhánh CNN
     pretrain_path = os.path.join(os.path.dirname(__file__), "saved_models", "cnn_pretrained.pth")
@@ -92,7 +95,7 @@ def train():
         print(f"CẢNH BÁO: Không tìm thấy {pretrain_path}! Mô hình sẽ train CNN từ đầu.")
     
     # --- 4. CẤU HÌNH HUẤN LUYỆN ---
-    criterion_caption = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    criterion_caption = nn.CrossEntropyLoss(ignore_index=pad_idx)
     criterion_motion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
 
@@ -126,8 +129,8 @@ def train():
             # 2. Loss Van ban
             # vocab_outputs: [B, 30, vocab_size]
             # captions: [B, 30] <- Target KHÔNG cắt [:, 1:] vì decoder đã concat context vào đầu
-            vocab_size = len(tokenizer)
-            output_flat = vocab_outputs.view(-1, vocab_size)    # [B*30, vocab_size]
+            
+            output_flat = vocab_outputs.view(-1, vocab_size)
             target_flat = captions.contiguous().view(-1)        # [B*30]
             
             loss_cap = criterion_caption(output_flat, target_flat)
@@ -164,7 +167,7 @@ def train():
 
                 loss_motion = criterion_motion(future_preds, future_targets)
                 
-                output_flat = vocab_outputs.view(-1, len(tokenizer))
+                output_flat = vocab_outputs.view(-1,vocab_size)
                 target_flat = captions.contiguous().view(-1)  # Không cắt [:, 1:]
                 loss_cap = criterion_caption(output_flat, target_flat)
                 
@@ -200,4 +203,4 @@ def train():
                 break 
 
 if __name__ == "__main__":
-    train()
+    train() 
