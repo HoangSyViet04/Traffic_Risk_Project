@@ -19,8 +19,8 @@ class Config:
 
     # Kích thước vector nhúng (Embedding cho word)
     EMBED_SIZE = 256
-    # Kích thước hidden state cho LSTM (Encoder + Decoder)
-    HIDDEN_SIZE = 1024
+    # Kích thước hidden state cho LSTM (Encoder)
+    HIDDEN_SIZE = 512
 
     # Số lượng tham số sensor (Speed, Acceleration, Course)
     SENSOR_DIM = 3
@@ -28,10 +28,16 @@ class Config:
     # Action Regressor dự đoán số bước tương lai
     FUTURE_STEPS = 5
 
+    # --- Transformer Decoder ---
+    DECODER_LAYERS = 4
+    DECODER_HEADS = 8
+    DECODER_FF_DIM = 1024
+    DECODER_DROPOUT = 0.2
+
     # --- HUẤN LUYỆN ---
     BATCH_SIZE = 50
     NUM_EPOCHS = 30
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 1e-4
 
     # Thiết bị (tự động chọn GPU nếu có)
     DEVICE =  torch.device('cuda' if torch.cuda.is_available() else 'cpu')

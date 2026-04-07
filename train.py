@@ -107,6 +107,7 @@ def train():
     criterion_motion_mae = nn.L1Loss()  
 
     optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=Config.NUM_EPOCHS, eta_min=1e-6)
 
     best_val_loss = float('inf')
     patience = 5 
@@ -148,6 +149,7 @@ def train():
             # Học ngược
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             total_train_loss += loss.item()
@@ -196,7 +198,10 @@ def train():
         
         print(f"\n=> TỔNG KẾT EPOCH {epoch+1}:")
         print(f"   [Train] Tổng Loss: {avg_train_loss:.4f}")
-        print(f"   [Val]   Tổng Loss: {avg_val_loss:.4f} | Motion MSE: {avg_val_motion_mse:.4f} | Motion MAE: {avg_val_motion_mae:.4f} | Caption Loss: {avg_val_cap_loss:.4f}\n")
+        print(f"   [Val]   Tổng Loss: {avg_val_loss:.4f} | Motion MSE: {avg_val_motion_mse:.4f} | Motion MAE: {avg_val_motion_mae:.4f} | Caption Loss: {avg_val_cap_loss:.4f}")
+        print(f"   [LR]    {scheduler.get_last_lr()[0]:.6f}")
+
+        scheduler.step()
         
         # Ghi vào file log CSV (Thêm cột MAE)
         with open(log_file, "a", encoding="utf-8") as f:

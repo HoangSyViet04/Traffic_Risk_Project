@@ -23,7 +23,11 @@ class DrivingRiskModel(nn.Module):
             context_dim=context_dim,
             hidden_size=config.HIDDEN_SIZE,
             vocab_size=vocab_size,
-            embed_size=config.EMBED_SIZE
+            embed_size=config.EMBED_SIZE,
+            num_layers=getattr(config, 'DECODER_LAYERS', 4),
+            nhead=getattr(config, 'DECODER_HEADS', 8),
+            dim_feedforward=getattr(config, 'DECODER_FF_DIM', 1024),
+            dropout=getattr(config, 'DECODER_DROPOUT', 0.2),
         )
 
     def forward(self, images, sensors, captions):

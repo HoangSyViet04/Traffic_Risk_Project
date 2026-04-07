@@ -24,7 +24,7 @@ class PositionalEncoding(nn.Module):
 
 class CaptionDecoder(nn.Module):
     """Baby Transformer Decoder: Nhỏ gọn, tinh võ, chống học vẹt."""
-    def __init__(self, context_dim, hidden_size, vocab_size, embed_size=256, num_layers=2, nhead=4, dropout=0.3):
+    def __init__(self, context_dim, hidden_size, vocab_size, embed_size=256, num_layers=4, nhead=8, dim_feedforward=1024, dropout=0.2):
         super(CaptionDecoder, self).__init__()
         self.vocab_size = vocab_size
         self.embed_size = embed_size
@@ -41,7 +41,7 @@ class CaptionDecoder(nn.Module):
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=embed_size, 
             nhead=nhead, 
-            dim_feedforward=512,  
+            dim_feedforward=dim_feedforward,
             dropout=dropout,
             batch_first=True
         )

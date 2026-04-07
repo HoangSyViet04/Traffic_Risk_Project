@@ -14,3 +14,4 @@ saved_models/best_model_e4.pth
 saved_models/best_model_e4_attention.pth
 saved_models/best_model_e4_transformer_focal_loss.pth
 saved_models/best_model_e4_transformer_focal_loss_4.pth
+saved_models/best_model_change_cnn_theo_co_cao_nhat.pth

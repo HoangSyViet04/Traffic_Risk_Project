@@ -6,31 +6,43 @@ from src.models.pretrain_cnn import build_cnn5_feature_extractor
 
 class MultimodalEncoder(nn.Module):
     """
-    Multimodal Encoder theo hướng paper:
+    Multimodal Encoder v2:
     - CNN 5 lớp (giống PretrainCNN) cho ảnh [B, 3, 90, 160]
-    - Feature map [B, 64, 12, 20] -> flatten [B, 15360]
-    - Early Fusion với sensor (3-d): 60@20x12 = 15360 + 3 = 15363
-    - LSTM 2 tầng: input_size=15363, hidden_size=1024
+    - Feature: [B, 64] (sau GAP + flatten)
+    - Projection: 64 → 256 (mở rộng đặc trưng)
+    - Early Fusion: 256 + 3 = 259
+    - LSTM 2 tầng: input_size=259, hidden_size=512
+    - LayerNorm trên context vector
     """
 
-    def __init__(self, hidden_size=1024, sensor_dim=3, freeze_cnn=False):
+    def __init__(self, hidden_size=512, sensor_dim=3, freeze_cnn=False):
         super(MultimodalEncoder, self).__init__()
 
         # --- NHÁNH HÌNH ẢNH (CNN Feature Extractor) ---
-        # Dùng đúng CNN 5 lớp như lúc pre-train.
         self.cnn = build_cnn5_feature_extractor()
         self.freeze_cnn = freeze_cnn
 
-        # --- EARLY FUSION LSTM ---
-        # Input size = flattened image feature (15360) + sensor (3) = 15363
-        self.image_feature_dim = 64 
-        fusion_input_dim = self.image_feature_dim + sensor_dim
-        self.lstm = nn.LSTM(
-            input_size=fusion_input_dim,  # 15363
-            hidden_size=hidden_size,      # 1024
-            num_layers=2,                 # 2 tầng LSTM
-            batch_first=True
+        # --- PROJECTION: MỞ RỘNG ĐẶC TRƯNG ẢNH ---
+        self.image_feature_dim = 64
+        self.projection_dim = 256
+        self.image_projection = nn.Sequential(
+            nn.Linear(self.image_feature_dim, self.projection_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
         )
+
+        # --- EARLY FUSION LSTM ---
+        fusion_input_dim = self.projection_dim + sensor_dim  # 256 + 3 = 259
+        self.lstm = nn.LSTM(
+            input_size=fusion_input_dim,   # 259
+            hidden_size=hidden_size,       # 512
+            num_layers=2,
+            batch_first=True,
+            dropout=0.3,                   # dropout giữa các tầng LSTM
+        )
+
+        # LayerNorm ổn định context vector
+        self.context_norm = nn.LayerNorm(hidden_size)
 
     def load_pretrained_cnn(self, path):
         """
@@ -66,33 +78,34 @@ class MultimodalEncoder(nn.Module):
             images:  [Batch, 16, 3, 90, 160]
             sensors: [Batch, 16, 3]  (speed, acceleration, course)
         Returns:
-            context_vector: [Batch, 1024]
+            lstm_out:       [Batch, 16, 512]
+            context_vector: [Batch, 512]
         """
         batch_size, frames, C, H, W = images.shape
 
         # --- A. TRÍCH XUẤT ĐẶC TRƯNG ẢNH ---
-        # Gộp Batch*Frames để đưa qua CNN một lượt
-        c_in = images.view(batch_size * frames, C, H, W)  # shape: [B*16, 3, 90, 160]
+        c_in = images.view(batch_size * frames, C, H, W)  # [B*16, 3, 90, 160]
 
         if self.freeze_cnn:
             with torch.no_grad():
-                features = self.cnn(c_in)  # shape: [B*16, 64, 12, 20]
+                features = self.cnn(c_in)  # [B*16, 64, 1, 1]
         else:
-            features = self.cnn(c_in)      # shape: [B*16, 64, 12, 20]
+            features = self.cnn(c_in)      # [B*16, 64, 1, 1]
 
-        features = features.view(features.size(0), -1)           # shape: [B*16, 15360]
-        features = features.view(batch_size, frames, -1)         # shape: [B, 16, 15360]
+        features = features.view(features.size(0), -1)           # [B*16, 64]
 
-        # --- B. EARLY FUSION: NỐI IMAGE + SENSOR ---
-        # sensors: [B, 16, 3]
-        fused = torch.cat((features, sensors), dim=2)            # shape: [B, 16, 15363]
+        # --- B. PROJECTION: MỞ RỘNG ĐẶC TRƯNG ---
+        features = self.image_projection(features)               # [B*16, 256]
+        features = features.view(batch_size, frames, -1)         # [B, 16, 256]
 
-        # --- C. LSTM 2 TẦNG ---
-        # lstm_out: [B, 16, 1024] (output tại mọi timestep)
-        # h_n:      [2, B, 1024]  (hidden state cuối của mỗi tầng)
-        lstm_out, (h_n, c_n) = self.lstm(fused)   # lstm_out: [B, 16, 1024] (output tại mọi timestep)
+        # --- C. EARLY FUSION: NỐI IMAGE + SENSOR ---
+        fused = torch.cat((features, sensors), dim=2)            # [B, 16, 259]
 
-        # Lấy hidden state cuối cùng của TẦNG THỨ 2 (index -1)
-        context_vector = h_n[-1]                                 # shape: [B, 1024]
+        # --- D. LSTM 2 TẦNG ---
+        lstm_out, (h_n, c_n) = self.lstm(fused)   # lstm_out: [B, 16, 512]
+
+        # Lấy hidden state cuối cùng của TẦNG THỨ 2
+        context_vector = h_n[-1]                                 # [B, 512]
+        context_vector = self.context_norm(context_vector)       # LayerNorm
 
         return lstm_out, context_vector
